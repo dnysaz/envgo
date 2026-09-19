@@ -1,0 +1,17 @@
+# binaries
+/envgo
+/envgo.exe
+dist/
+
+# upx build artifacts
+/tools/upx
+/tools/build/
+/tools/src/
+
+# local secrets — never commit
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
