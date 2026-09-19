@@ -6,6 +6,16 @@ browser**. It serves your static site and proxies API calls, replacing
 `{VAR_NAME}` placeholders with real values inside the Go process — invisible
 to DevTools, the Network tab, and browser memory.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/dnysaz/envgo)](https://github.com/dnysaz/envgo/releases/latest)
+[![Go version](https://img.shields.io/github/go-mod/go-version/dnysaz/envgo)](go.mod)
+
+**Free and open source under the MIT license.** No paid tier, no licence key, no
+account, no telemetry. Download it, use it commercially, modify it, ship it —
+see [License](#license).
+
+Full documentation: **https://dnysaz.github.io/envgo-site/**
+
 ## Why
 
 - `.env` in a browser leaks secrets (readable via F12 / Network / memory).
@@ -27,6 +37,25 @@ to DevTools, the Network tab, and browser memory.
 ---
 
 ## Install
+
+### Prebuilt binaries
+
+Download the archive for your platform from the
+[latest release](https://github.com/dnysaz/envgo/releases/latest). Every release
+includes a `SHA256SUMS` file you can use to verify the download.
+
+| Platform | File |
+|----------|------|
+| macOS, Apple Silicon | `envGo-macOS-AppleSilicon.zip` |
+| macOS, Intel | `envGo-macOS-Intel.zip` |
+| Linux, amd64 | `envgo-linux-amd64` |
+| Linux, arm64 | `envgo-linux-arm64` |
+| Windows, amd64 | `envgo-windows-amd64.exe` |
+| Windows, arm64 | `envgo-windows-arm64.exe` |
+
+The steps below assume you already have the files (for example after running
+`make release`). For platform-specific instructions, see the
+[documentation](https://dnysaz.github.io/envgo-site/download/).
 
 ### macOS
 
@@ -522,11 +551,11 @@ internal/gateway       public-mode gateway
 internal/token         per-session token
 internal/server        static + guards + PHP
 internal/proxy         injection + outbound engine
-internal/ratelimit     token-bucket limiter
+internal/ratelimit     fixed-window rate limiter
 internal/history       in-memory request log
 internal/logger        redacting logger
 scripts/               install.sh
-dist/                  pre-built binaries (make release)
+dist/                  local build output (gitignored; make release)
 ```
 
 ## Threat Model
@@ -542,3 +571,45 @@ dist/                  pre-built binaries (make release)
 | LAN access | Bound to `127.0.0.1` only |
 | TLS downgrade | MinVersion TLS 1.2 when using `--tls` |
 | PHP code execution | 30s timeout, typo detection, security warning |
+
+---
+
+## Contributing and feedback
+
+Feedback of every size is welcome — a confusing error message is as useful to
+hear about as a bug. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
+
+| What you have | Where to put it |
+|---------------|-----------------|
+| A bug or crash | [Open an issue](https://github.com/dnysaz/envgo/issues/new/choose) |
+| An idea or question | [Start a discussion](https://github.com/dnysaz/envgo/discussions) |
+| A security concern | Follow [SECURITY.md](SECURITY.md) — privately, not in a public issue |
+| A docs problem | [dnysaz/envgo-site](https://github.com/dnysaz/envgo-site/issues) |
+
+Before contributing code, note the two constraints that matter most: **no
+third-party dependencies** (the standard library is the whole toolkit) and
+**secrets must never reach the client**.
+
+```bash
+make build    # build ./envgo
+make test     # run the test suite
+make vet      # run go vet
+make release  # cross-compile every platform into dist/
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Copyright (c) 2026 Ketut Dana
+
+You may use, copy, modify, merge, publish, distribute, sublicense, and sell
+copies of this software, including for commercial and closed-source projects.
+The only requirement is that the copyright notice and licence text are included.
+There is no fee, no registration, and no restriction on the number of users,
+servers, or deployments.
+
+The software is provided "as is", without warranty of any kind. Review
+[the threat model](https://dnysaz.github.io/envgo-site/reference/threat-model/)
+for the behaviours you are responsible for configuring yourself — in particular
+rate limiting, which is unlimited unless you set it.
