@@ -73,13 +73,26 @@ type Handler struct {
 }
 
 func New(vars VarSource, log loggerI, allow []string, hist *history.History) *Handler {
-	return &Handler{
-		vars:   vars,
-		log:    log,
-		hist:   hist,
-		client: &http.Client{Timeout: 60 * time.Second},
-		allow:  allow,
+	h := &Handler{
+		vars:  vars,
+		log:   log,
+		hist:  hist,
+		allow: allow,
 	}
+	h.client = &http.Client{
+		Timeout: 60 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if !strings.HasPrefix(req.URL.String(), "https://") {
+				return fmt.Errorf("redirect to non-HTTPS blocked: %s", req.URL)
+			}
+			host := hostOnly(req.URL.String())
+			if !hostAllowed(host, allow) {
+				return fmt.Errorf("redirect host not in allowlist: %s", host)
+			}
+			return nil
+		},
+	}
+	return h
 }
 
 type ProxyRequest struct {

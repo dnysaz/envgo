@@ -126,9 +126,16 @@ func main() {
 		fmt.Println("Options:")
 		flag.PrintDefaults()
 		fmt.Println()
+		fmt.Println("Env (.env) overrides:")
+		fmt.Println("  HOST, PORT            (with 'envgo run')")
+		fmt.Println("  MODE_PUBLIC=true/false or MODE=public/local, PUBLIC_MODE, ENVGO_MODE")
+		fmt.Println("  CONFIG / ENVGO_CONFIG / ROUTES = path to routes JSON (enables public mode)")
+		fmt.Println("  Flag --config always wins over .env")
+		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  envgo --dir . --env .env --allow httpbin.org")
-		fmt.Println("  envgo run dev                                # reads HOST/PORT from .env")
+		fmt.Println("  envgo run dev                                # reads HOST/PORT/MODE_PUBLIC from .env")
+		fmt.Println("  MODE_PUBLIC=true envgo run dev               # public mode via .env")
 		fmt.Println("  envgo init -name myapp                       # create project template")
 		fmt.Println("  envgo deploy -o ./deploy                     # generate Caddyfile + nginx.conf")
 		fmt.Println("  envgo --tls --dir public -b                  # HTTPS with auto-cert")
@@ -214,6 +221,64 @@ func main() {
 	if err != nil {
 		log.Error("cannot bind %s:%d", hostVal, portVal)
 		os.Exit(1)
+	}
+
+	// MODE_PUBLIC / CONFIG via .env — lets users switch mode without flags.
+	// Flag --config always wins; otherwise we resolve from .env.
+	// Supported keys (first match wins):
+	//   CONFIG, ENVGO_CONFIG, ROUTES -> explicit path
+	//   MODE_PUBLIC, PUBLIC_MODE, ENVGO_MODE, MODE -> true/public = enable public mode
+	if configPathVal == "" {
+		for _, k := range []string{"CONFIG", "ENVGO_CONFIG", "ROUTES", "ROUTES_PATH", "CONFIG_PATH"} {
+			if v, ok := store.Get(k); ok && strings.TrimSpace(v) != "" {
+				raw := strings.TrimSpace(v)
+				// Resolve relative paths: try cwd, then env dir, then --dir
+				resolved := raw
+				if !filepath.IsAbs(raw) {
+					candidates := []string{raw, filepath.Join(filepath.Dir(envPathVal), raw), filepath.Join(dirVal, raw)}
+					for _, c := range candidates {
+						if _, err := os.Stat(c); err == nil {
+							resolved = c
+							break
+						}
+					}
+				}
+				configPathVal = resolved
+				log.Info("using CONFIG from .env %s=%s", k, configPathVal)
+				break
+			}
+		}
+		if configPathVal == "" {
+			for _, k := range []string{"MODE_PUBLIC", "PUBLIC_MODE", "ENVGO_MODE", "MODE"} {
+				if v, ok := store.Get(k); ok {
+					vl := strings.ToLower(strings.TrimSpace(v))
+					isPublic := vl == "true" || vl == "1" || vl == "yes" || vl == "public"
+					isLocal := vl == "false" || vl == "0" || vl == "no" || vl == "local"
+					if isPublic {
+						// try to find an existing routes file, fallback to envgo.routes.json
+						found := ""
+						envDir := filepath.Dir(envPathVal)
+						for _, p := range []string{"envgo.routes.json", "routes.json", filepath.Join(envDir, "envgo.routes.json"), filepath.Join(envDir, "routes.json"), filepath.Join(dirVal, "envgo.routes.json"), filepath.Join(dirVal, "routes.json")} {
+							if _, err := os.Stat(p); err == nil {
+								found = p
+								break
+							}
+						}
+						if found != "" {
+							configPathVal = found
+						} else {
+							configPathVal = "envgo.routes.json"
+						}
+						log.Info("using public mode from .env %s=%s -> config=%s", k, v, configPathVal)
+					} else if isLocal {
+						log.Info("using local mode from .env %s=%s", k, v)
+					} else if strings.TrimSpace(v) != "" {
+						log.Warn("unknown value for %s=%q (expected true/false or public/local), ignoring", k, v)
+					}
+					break
+				}
+			}
+		}
 	}
 
 	allow := splitAllow(allowListVal)
@@ -330,6 +395,9 @@ func doInit(name string) {
 MY_SECRET=change-me
 HOST=127.0.0.1
 PORT=8080
+# MODE_PUBLIC=false   # true/public = public mode (needs envgo.routes.json), false/local = local mode
+# CONFIG=envgo.routes.json  # optional: explicit routes file (overrides MODE_PUBLIC)
+
 `
 	envExampleContent := `# envGo project
 # Copy to .env and fill in real values. NEVER commit the real .env.
@@ -337,6 +405,9 @@ PORT=8080
 MY_SECRET=change-me
 HOST=127.0.0.1
 PORT=8080
+# MODE_PUBLIC=false   # true/public = public mode (needs envgo.routes.json), false/local = local mode
+# CONFIG=envgo.routes.json  # optional: explicit routes file (overrides MODE_PUBLIC)
+
 `
 	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte(envExampleContent), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing .env.example: %v\n", err)
@@ -564,15 +635,25 @@ func checkEnvExampleSync(envPath string) {
 	if _, err := os.Stat(examplePath); os.IsNotExist(err) {
 		return
 	}
-	// Parse .env keys
+	// Parse .env keys — ignore infra keys that are not secrets
+	ignoreKeys := map[string]bool{
+		"MODE_PUBLIC": true, "PUBLIC_MODE": true, "ENVGO_MODE": true, "MODE": true,
+		"CONFIG": true, "ENVGO_CONFIG": true, "ROUTES": true, "ROUTES_PATH": true, "CONFIG_PATH": true,
+	}
 	envKeys := parseEnvKeys(envPath)
 	exampleKeys := parseEnvKeys(examplePath)
 	for k := range envKeys {
+		if ignoreKeys[k] {
+			continue
+		}
 		if _, ok := exampleKeys[k]; !ok {
 			fmt.Fprintf(os.Stderr, "envGo: warning: %s in .env but not in .env.example\n", k)
 		}
 	}
 	for k := range exampleKeys {
+		if ignoreKeys[k] {
+			continue
+		}
 		if _, ok := envKeys[k]; !ok {
 			fmt.Fprintf(os.Stderr, "envGo: hint: %s in .env.example but not in .env — add it\n", k)
 		}

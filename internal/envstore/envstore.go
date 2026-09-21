@@ -106,10 +106,15 @@ func (s *Store) reloadLocked() error {
 	s.size = fi.Size()
 	s.mu.Unlock()
 	if s.log != nil {
-		// Don't treat HOST/PORT as secrets — they need to appear in logs.
+		// Don't treat HOST/PORT/MODE flags as secrets — they need to appear in logs.
+		skip := map[string]bool{
+			"HOST": true, "PORT": true, "host": true, "port": true,
+			"MODE_PUBLIC": true, "PUBLIC_MODE": true, "ENVGO_MODE": true, "MODE": true,
+			"CONFIG": true, "ENVGO_CONFIG": true, "ROUTES": true, "ROUTES_PATH": true, "CONFIG_PATH": true,
+		}
 		filtered := make(map[string]string, len(vars))
 		for k, v := range vars {
-			if k == "HOST" || k == "PORT" || k == "host" || k == "port" {
+			if skip[k] {
 				continue
 			}
 			filtered[k] = v

@@ -118,6 +118,8 @@ This creates:
 MY_SECRET=your-real-secret-here
 HOST=127.0.0.1
 PORT=8080
+# MODE_PUBLIC=false  # true/public = public gateway (needs envgo.routes.json)
+# CONFIG=envgo.routes.json  # explicit routes file (overrides MODE_PUBLIC)
 ```
 
 ### 3. Run
@@ -236,7 +238,12 @@ Create `envgo.routes.json`:
 ### 2. Run
 
 ```bash
+# via flag (classic)
 envgo --config envgo.routes.json --env .env --dir . --host 127.0.0.1 --port 8080
+
+# or via .env alone (new): set MODE_PUBLIC=true in .env then
+envgo run dev
+# same as above, reads MODE_PUBLIC + CONFIG from .env
 ```
 
 ### 3. Frontend calls
@@ -525,6 +532,17 @@ Enable with `--dashboard` flag.
 | `--debug` | | Verbose logging |
 | `--version` | `-v` | Print version |
 | `--help` | `-h` | Show help |
+
+### `.env` overrides (no flag needed)
+
+`envgo run` reads `HOST`/`PORT` from `.env`. Public mode can also be set from `.env` without flags:
+
+```env
+MODE_PUBLIC=true          # or false, 1/0, yes/no, public/local
+# aliases: MODE, PUBLIC_MODE, ENVGO_MODE
+CONFIG=envgo.routes.json  # or ENVGO_CONFIG, ROUTES — explicit path (wins over MODE_PUBLIC)
+```
+Flag `--config` always wins over `.env`. Example: `MODE_PUBLIC=true envgo run dev` starts public mode via `.env` alone.
 
 ---
 

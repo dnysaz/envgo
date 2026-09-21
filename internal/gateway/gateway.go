@@ -57,7 +57,15 @@ func New(cfg *Config, vars proxy.VarSource, log Logger, hist *history.History) *
 		cfg:     cfg,
 		vars:    vars,
 		log:     log,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		client: &http.Client{
+			Timeout: 60 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if !strings.HasPrefix(req.URL.String(), "https://") {
+					return fmt.Errorf("redirect to non-HTTPS blocked: %s", req.URL)
+				}
+				return nil
+			},
+		},
 		limiter: ratelimit.New(),
 		hist:    hist,
 		routes:  make(map[string]*compiled, len(cfg.Routes)),
