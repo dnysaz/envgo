@@ -63,7 +63,7 @@ Out of scope — these are known, documented limitations rather than defects:
   about it.
 - **A self-signed certificate from `--tls`.** Expected for development only.
 
-See the [threat model](https://dnysaz.github.io/envgo-site/reference/threat-model/)
+See the [threat model](https://envgo.dev/reference/threat-model/)
 for the full list, including what envGo explicitly does not protect against.
 
 ## Hardening checklist for operators

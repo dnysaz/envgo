@@ -14,7 +14,7 @@ to DevTools, the Network tab, and browser memory.
 account, no telemetry. Download it, use it commercially, modify it, ship it —
 see [License](#license).
 
-Full documentation: **https://dnysaz.github.io/envgo-site/**
+Full documentation: **https://envgo.dev/**
 
 ## Why
 
@@ -55,7 +55,7 @@ includes a `SHA256SUMS` file you can use to verify the download.
 
 The steps below assume you already have the files (for example after running
 `make release`). For platform-specific instructions, see the
-[documentation](https://dnysaz.github.io/envgo-site/download/).
+[documentation](https://envgo.dev/download/).
 
 ### macOS
 
@@ -610,6 +610,6 @@ There is no fee, no registration, and no restriction on the number of users,
 servers, or deployments.
 
 The software is provided "as is", without warranty of any kind. Review
-[the threat model](https://dnysaz.github.io/envgo-site/reference/threat-model/)
+[the threat model](https://envgo.dev/reference/threat-model/)
 for the behaviours you are responsible for configuring yourself — in particular
 rate limiting, which is unlimited unless you set it.
