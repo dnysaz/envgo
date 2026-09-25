@@ -69,6 +69,9 @@ for the full list, including what envGo explicitly does not protect against.
 ## Hardening checklist for operators
 
 - Keep `.env` outside the served web root, mode `600`, and out of git
+- Verify `dist/SHA256SUMS` before installing Windows or Linux artifacts,
+  including `Install_envGo.ps1` when using the PowerShell installer
+- Treat `envgo-windows-*.exe` as the runtime executable, not an installer
 - Bind to `127.0.0.1` and put a reverse proxy in front for TLS
 - Set `default_rate_limit` or a per-route `rate_limit` — empty means unlimited
 - Enable `trust_proxy` only when a proxy you control is actually in front

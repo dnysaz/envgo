@@ -53,8 +53,14 @@ includes a `SHA256SUMS` file you can use to verify the download.
 | Windows, amd64 | `envgo-windows-amd64.exe` |
 | Windows, arm64 | `envgo-windows-arm64.exe` |
 
-The steps below assume you already have the files (for example after running
-`make release`). For platform-specific instructions, see the
+The Windows and Linux files are static, uncompressed Go executables. The
+Windows `.exe` is the runtime, not an installer: running it directly starts
+envGo and a console window is expected. The release target keeps the existing
+macOS artifacts untouched and updates only the Windows/Linux files and
+`dist/SHA256SUMS`.
+
+The steps below assume you already have the files from a release archive or
+have run `make release`. For platform-specific instructions, see the
 [documentation](https://envgo.dev/download/).
 
 ### macOS
@@ -81,7 +87,22 @@ sudo chmod +x /usr/local/bin/envgo
 
 ### Windows
 
+The `.exe` is a console application, so a Command Prompt window appearing while
+it runs is normal. Install it from a checkout with the verified PowerShell
+installer:
+
+```powershell
+powershell -NoProfile -File .\scripts\install.ps1
 ```
+
+The installer detects AMD64/ARM64, verifies the SHA-256 entry in
+`dist/SHA256SUMS`, installs to `%LOCALAPPDATA%\Programs\envGo` without admin
+rights, and adds that directory to the user `PATH`. Verify the installer and
+binary against the checksum file before running them. A standalone copy of
+`Install_envGo.ps1` can be placed beside the Windows binary and checksum file.
+Manual installation remains available:
+
+```text
 Copy envgo-windows-amd64.exe to C:\envgo\envgo.exe
 Add C:\envgo to PATH
 ```
@@ -572,8 +593,8 @@ internal/proxy         injection + outbound engine
 internal/ratelimit     fixed-window rate limiter
 internal/history       in-memory request log
 internal/logger        redacting logger
-scripts/               install.sh
-dist/                  local build output (gitignored; make release)
+scripts/               install.sh, install.ps1
+dist/                  verified Windows/Linux output plus preserved macOS artifacts
 ```
 
 ## Threat Model
@@ -612,7 +633,7 @@ third-party dependencies** (the standard library is the whole toolkit) and
 make build    # build ./envgo
 make test     # run the test suite
 make vet      # run go vet
-make release  # cross-compile every platform into dist/
+make release  # rebuild verified Windows/Linux binaries in dist/
 ```
 
 ## License

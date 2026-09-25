@@ -26,7 +26,7 @@ When reporting a bug, please include:
 
 ## Development
 
-Requirements: Go 1.21 or newer.
+Requirements: Go 1.27.1 or newer.
 
 ```bash
 git clone https://github.com/dnysaz/envgo.git
@@ -35,7 +35,7 @@ cd envgo
 make build     # build ./envgo
 make test      # run the test suite
 make vet       # run go vet
-make release   # cross-compile every platform into dist/
+make release   # rebuild verified Windows/Linux binaries into dist/
 ```
 
 Before opening a pull request, please make sure `make vet` and `make test` pass.
