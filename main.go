@@ -26,6 +26,7 @@ import (
 	"envbridge/internal/envstore"
 	"envbridge/internal/gateway"
 	"envbridge/internal/history"
+	"envbridge/internal/hotreload"
 	"envbridge/internal/logger"
 	"envbridge/internal/server"
 	"envbridge/internal/token"
@@ -52,6 +53,7 @@ func main() {
 	initMode := false
 	deployMode := false
 	updateMode := false
+	cacheMode := false
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "run":
@@ -75,6 +77,19 @@ func main() {
 		case "deploy":
 			deployMode = true
 			os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
+		case "cache":
+			cacheSub := ""
+			if len(os.Args) > 2 {
+				cacheSub = os.Args[2]
+				os.Args = append([]string{os.Args[0]}, os.Args[3:]...)
+			} else {
+				os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
+			}
+			if cacheSub != "clear" {
+				fmt.Println("Usage: envgo cache clear")
+				os.Exit(0)
+			}
+			cacheMode = true
 		}
 	}
 
@@ -175,6 +190,10 @@ func main() {
 		doUpdate()
 		return
 	}
+	if cacheMode {
+		doCacheClear(envPathVal)
+		return
+	}
 
 	log := logger.New(debugVal)
 
@@ -219,6 +238,12 @@ func main() {
 	watchCtx, stopWatch := context.WithCancel(context.Background())
 	defer stopWatch()
 	go store.Watch(watchCtx, 1500*time.Millisecond)
+
+	var broadcaster *hotreload.Broadcaster
+	if isDev {
+		broadcaster = hotreload.New()
+		go broadcaster.WatchDir(watchCtx, dirVal, 500*time.Millisecond)
+	}
 
 	sessToken, err := token.New()
 	if err != nil {
@@ -329,6 +354,8 @@ func main() {
 		Gateway:       gw,
 		ShowDashboard: gw == nil || dashboardVal,
 		ConfigPath:    configPathVal,
+		DevMode:       isDev,
+		HotReload:     broadcaster,
 	})
 
 	var httpSrv *http.Server

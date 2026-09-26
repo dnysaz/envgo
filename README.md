@@ -522,7 +522,7 @@ if (!$secret) {
 
 ---
 
-## Hot Reload
+## Environment Hot Reload
 
 Edit `.env` while envGo is running — changes picked up within ~1.5 seconds.
 
@@ -534,6 +534,45 @@ envgo run dev
 echo "NEW_SECRET=new-value" >> .env
 # → [envGo] hot-reloaded 5 variables from .env
 ```
+
+---
+
+## Browser Hot Reload
+
+While running in dev mode (`envgo run dev`), envGo watches `.html`, `.css`,
+`.js`, and `.php` files under your web root. Saving one of them pushes a
+`reload` event over SSE to every open browser tab, which then does
+`location.reload()` — no manual refresh needed. No external dependencies,
+browser extensions, or WebSocket server required.
+
+- Triggered by file **create / modify / delete** (not content-only moves).
+- `.css`/`.js` changes push `reload` (soft navigation reload); all other
+  watched extensions push `reload`.
+- Dev responses carry `Cache-Control: no-store` so browsers always refetch.
+- Run `envgo cache clear` to broadcast a hard-reload to all tabs and tell
+  browsers to drop cached assets (handy after an edit the watcher missed).
+
+```bash
+envgo run dev
+# → browser auto-refreshes on every save to *.html / *.css / *.js / *.php
+```
+
+---
+
+## Cache
+
+In dev mode envGo serves assets with `Cache-Control: no-store`. To force every
+connected browser to hard-reload and re-fetch fresh assets, run:
+
+```bash
+envgo cache clear
+# → Cache cleared — browsers will hard-reload with fresh resources.
+```
+
+This POSTs to the running dev server's `/__envgo/admin/clear-cache` endpoint,
+which broadcasts a `hardreload` event to all subscribed tabs. If no dev server
+is running, use `envgo run update` to restart on the new binary, or run the
+command from within a dev session.
 
 ---
 
@@ -554,6 +593,8 @@ Enable with `--dashboard` flag.
 | Command | Description |
 |---------|-------------|
 | `envgo run dev` | Start dev server, read HOST/PORT from .env, auto-open browser |
+| `envgo run update` | Check for and install the latest envgo release |
+| `envgo cache clear` | Broadcast a hard-reload to all dev-server browser tabs |
 | `envgo init` | Create new project template in current directory |
 | `envgo init -name myapp` | Create project in subdirectory `myapp/` |
 | `envgo deploy -o ./deploy` | Generate Caddyfile, nginx.conf, Dockerfile |

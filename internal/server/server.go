@@ -15,6 +15,7 @@ import (
 
 	"envbridge/internal/gateway"
 	"envbridge/internal/history"
+	"envbridge/internal/hotreload"
 	"envbridge/internal/logger"
 	"envbridge/internal/proxy"
 )
@@ -32,6 +33,8 @@ type Options struct {
 	Gateway       *gateway.Gateway
 	ShowDashboard bool
 	ConfigPath    string
+	DevMode       bool
+	HotReload     *hotreload.Broadcaster
 }
 
 // Server wires the static file handler, the /proxy engine and the
@@ -105,6 +108,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.serveDashboardData(w, r)
 		}
+	case r.URL.Path == "/__envgo/reload":
+		s.serveSSEReload(w, r)
+		return
+	case r.URL.Path == "/__envgo/admin/clear-cache":
+		s.adminClearCache(w, r)
+		return
 	default:
 		s.serveStatic(w, r)
 	}
@@ -308,6 +317,12 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if s.dev() {
+		setNoCacheHeaders(w)
+	}
+	if s.serveHTMLDev(w, full) {
+		return
+	}
 	http.ServeFile(w, r, full)
 }
 
@@ -320,6 +335,12 @@ func (s *Server) serveFileOrIndex(w http.ResponseWriter, r *http.Request, dir st
 				if s.servePHP(w, r, idx) {
 					return
 				}
+			}
+			if s.dev() {
+				setNoCacheHeaders(w)
+			}
+			if s.serveHTMLDev(w, idx) {
+				return
 			}
 			http.ServeFile(w, r, idx)
 			return
@@ -446,6 +467,13 @@ func (s *Server) servePHP(w http.ResponseWriter, r *http.Request, path string) b
 		issueNames := strings.Join(secIssues, ", ")
 		banner := `<div style="position:fixed;top:0;left:0;right:0;background:#fee2e2;color:#991b1b;padding:12px 16px;text-align:center;z-index:9999;font:13px monospace;border-bottom:2px solid #f87171">envGo — SECURITY WARNING: ` + issueNames + ` echoed to browser. Secrets exposed! Remove echo/print of getenv/$_ENV/$_SERVER.</div>`
 		body = append([]byte(banner), body...)
+	}
+	if s.dev() {
+		setNoCacheHeaders(w)
+		ct := w.Header().Get("Content-Type")
+		if strings.HasPrefix(strings.ToLower(ct), "text/html") {
+			body = injectReloadScript(body)
+		}
 	}
 	_, _ = w.Write(body)
 	return true
