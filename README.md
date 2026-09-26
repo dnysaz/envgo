@@ -30,7 +30,7 @@ Full documentation: **https://envgo.dev/**
 - SSE/streaming passthrough (e.g. OpenAI `stream: true`).
 - **Public gateway mode** (`--config`): fixed routes at `/api/<name>` with per-route allowlist, rate limiting, optional bearer auth, and response scrubbing.
 - **TLS support** (`--tls`): auto-generated self-signed certificate for HTTPS.
-- **PHP support**: execute `.php` files server-side with `.env` vars injected.
+- **PHP support**: execute `.php` files server-side with `.env` vars injected (php-cgi preferred for `header()` support).
 - **Typo detection**: red banner if HTML `id` doesn't match `.env` key.
 - Cross-platform: macOS, Linux, Windows.
 
@@ -494,6 +494,9 @@ if (!$secret) {
 - **Typo detection**: If PHP code uses `getenv("WRONG_KEY")`, red banner appears
 - **Security warning**: If PHP code does `echo getenv("KEY")`, red banner warns about secret exposure
 - **Timeout**: PHP scripts limited to 30 seconds execution time
+- **CGI mode**: Prefers `php-cgi` binary for proper `header()` and HTTP status support; falls back to CLI mode
+- **POST body passthrough**: `$_POST` and `php://input` work correctly for POST/PUT/PATCH requests
+- **Standard CGI variables**: `SCRIPT_FILENAME`, `REQUEST_METHOD`, `CONTENT_TYPE`, `CONTENT_LENGTH`, etc.
 - **Safe pattern**: `$secret = getenv("KEY"); echo "...hidden..."` — no warning
 - **Unsafe pattern**: `echo getenv("KEY")` — triggers security banner
 

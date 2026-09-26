@@ -228,3 +228,198 @@ func TestPublicModeDisablesLocalEndpoints(t *testing.T) {
 		t.Errorf("static = %d, want 200", rr.Code)
 	}
 }
+
+func TestDetectPHPTypo(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a PHP file with a typo (getenv for a key not in .env)
+	phpPath := filepath.Join(dir, "index.php")
+	phpContent := `<?php
+$secret = getenv("MY_SECRET");
+echo "Hello";
+`
+	os.WriteFile(phpPath, []byte(phpContent), 0o644)
+
+	namesFunc := func() []string { return []string{"OPENAI_API_KEY", "HOST"} }
+
+	t.Run("detects undefined key in getenv", func(t *testing.T) {
+		missing := detectPHPTypo(phpPath, namesFunc)
+		if len(missing) != 1 || missing[0] != "MY_SECRET" {
+			t.Errorf("expected [MY_SECRET], got %v", missing)
+		}
+	})
+
+	t.Run("no typo when key is defined", func(t *testing.T) {
+		phpContent2 := `<?php
+$key = getenv("OPENAI_API_KEY");
+echo "Hello";
+`
+		phpPath2 := filepath.Join(dir, "ok.php")
+		os.WriteFile(phpPath2, []byte(phpContent2), 0o644)
+
+		missing := detectPHPTypo(phpPath2, namesFunc)
+		if len(missing) != 0 {
+			t.Errorf("expected no missing keys, got %v", missing)
+		}
+	})
+
+	t.Run("detects $_ENV and $_SERVER access", func(t *testing.T) {
+		phpContent3 := `<?php
+echo $_ENV["DB_PASS"];
+echo $_SERVER["MISSING_VAR"];
+`
+		phpPath3 := filepath.Join(dir, "superglobal.php")
+		os.WriteFile(phpPath3, []byte(phpContent3), 0o644)
+
+		missing := detectPHPTypo(phpPath3, namesFunc)
+		if len(missing) != 2 {
+			t.Errorf("expected 2 missing keys, got %d: %v", len(missing), missing)
+		}
+		if len(missing) == 2 {
+			if missing[0] != "DB_PASS" || missing[1] != "MISSING_VAR" {
+				t.Errorf("expected [DB_PASS, MISSING_VAR], got %v", missing)
+			}
+		}
+	})
+
+	t.Run("nonexistent file returns nil", func(t *testing.T) {
+		missing := detectPHPTypo("/nonexistent/file.php", namesFunc)
+		if missing != nil {
+			t.Errorf("expected nil, got %v", missing)
+		}
+	})
+
+	t.Run("deduplicates repeated keys", func(t *testing.T) {
+		phpContent4 := `<?php
+echo getenv("MY_SECRET");
+echo getenv("MY_SECRET");
+echo getenv("MY_SECRET");
+`
+		phpPath4 := filepath.Join(dir, "dup.php")
+		os.WriteFile(phpPath4, []byte(phpContent4), 0o644)
+
+		missing := detectPHPTypo(phpPath4, namesFunc)
+		if len(missing) != 1 || missing[0] != "MY_SECRET" {
+			t.Errorf("expected [MY_SECRET] once, got %v", missing)
+		}
+	})
+}
+
+func TestDetectPHPSecurityIssue(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("detects echo getenv", func(t *testing.T) {
+		phpPath := filepath.Join(dir, "bad.php")
+		phpContent := `<?php echo getenv("MY_SECRET"); ?>`
+		os.WriteFile(phpPath, []byte(phpContent), 0o644)
+
+		issues := detectPHPSecurityIssue(phpPath)
+		if len(issues) != 1 || issues[0] != "getenv" {
+			t.Errorf("expected [getenv], got %v", issues)
+		}
+	})
+
+	t.Run("detects print $_ENV", func(t *testing.T) {
+		phpPath := filepath.Join(dir, "bad2.php")
+		phpContent := `<?php print $_ENV["SECRET"]; ?>`
+		os.WriteFile(phpPath, []byte(phpContent), 0o644)
+
+		issues := detectPHPSecurityIssue(phpPath)
+		if len(issues) != 1 || issues[0] != "$_ENV" {
+			t.Errorf("expected [$_ENV], got %v", issues)
+		}
+	})
+
+	t.Run("safe pattern not flagged", func(t *testing.T) {
+		phpPath := filepath.Join(dir, "safe.php")
+		phpContent := `<?php $secret = getenv("MY_SECRET"); echo "hidden"; ?>`
+		os.WriteFile(phpPath, []byte(phpContent), 0o644)
+
+		issues := detectPHPSecurityIssue(phpPath)
+		if len(issues) != 0 {
+			t.Errorf("expected no issues, got %v", issues)
+		}
+	})
+
+	t.Run("nonexistent file returns nil", func(t *testing.T) {
+		issues := detectPHPSecurityIssue("/nonexistent/file.php")
+		if issues != nil {
+			t.Errorf("expected nil, got %v", issues)
+		}
+	})
+}
+
+func TestFindHeaderEnd(t *testing.T) {
+	cases := []struct {
+		input    []byte
+		expected int
+	}{
+		{[]byte("Content-Type: text/html\r\n\r\nbody"), 27},
+		{[]byte("Content-Type: text/html\n\nbody"), 25},
+		{[]byte("no headers here"), -1},
+		{[]byte(""), -1},
+	}
+	for _, c := range cases {
+		got := findHeaderEnd(c.input)
+		if got != c.expected {
+			t.Errorf("findHeaderEnd(%q) = %d, want %d", c.input, got, c.expected)
+		}
+	}
+}
+
+func TestFindPHPMode(t *testing.T) {
+	path, mode := findPHPMode()
+	if path == "" {
+		// PHP not installed — that's OK, just verify mode is empty
+		if mode != "" {
+			t.Errorf("expected empty mode when no PHP found, got %q", mode)
+		}
+		t.Skip("PHP not installed, skipping")
+	}
+	if mode != "cgi" && mode != "cli" {
+		t.Errorf("findPHPMode mode = %q, want 'cgi' or 'cli'", mode)
+	}
+}
+
+func TestLEVENSHTEIN(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"", "", 0},
+		{"a", "", 1},
+		{"", "a", 1},
+		{"abc", "abc", 0},
+		{"kitten", "sitting", 3},
+		{"OPENAI_API_KEY", "OPENAI_API_KEY", 0},
+		{"MY_SECERT", "MY_SECRET", 2},
+	}
+	for _, c := range cases {
+		got := levenshtein(c.a, c.b)
+		if got != c.want {
+			t.Errorf("levenshtein(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestClosestMatch(t *testing.T) {
+	candidates := []string{"OPENAI_API_KEY", "MY_SECRET", "DATABASE_URL"}
+
+	t.Run("exact match", func(t *testing.T) {
+		if got := closestMatch("MY_SECRET", candidates); got != "MY_SECRET" {
+			t.Errorf("expected MY_SECRET, got %q", got)
+		}
+	})
+
+	t.Run("close match within distance 3", func(t *testing.T) {
+		if got := closestMatch("MY_SECRE", candidates); got != "MY_SECRET" {
+			t.Errorf("expected MY_SECRET, got %q", got)
+		}
+	})
+
+	t.Run("no match beyond distance 3", func(t *testing.T) {
+		if got := closestMatch("COMPLETELY_DIFFERENT", candidates); got != "" {
+			t.Errorf("expected empty, got %q", got)
+		}
+	})
+}

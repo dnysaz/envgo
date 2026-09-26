@@ -329,12 +329,14 @@ func (s *Server) serveFileOrIndex(w http.ResponseWriter, r *http.Request, dir st
 }
 
 // Serve PHP via exec.Command(php, path), inject .env vars, detect typos, inject error banner.
+// Uses php-cgi if available for proper header() and HTTP status support.
 func (s *Server) servePHP(w http.ResponseWriter, r *http.Request, path string) bool {
-	php, err := findPHP()
-	if err != nil {
+	phpPath, phpMode := findPHPMode()
+	if phpPath == "" {
 		return false
 	}
-	cmd := exec.Command(php, path)
+
+	// Build CGI environment
 	env := os.Environ()
 	if s.opts.EnvNames != nil {
 		for _, k := range s.opts.EnvNames() {
@@ -343,16 +345,55 @@ func (s *Server) servePHP(w http.ResponseWriter, r *http.Request, path string) b
 			}
 		}
 	}
-	env = append(env, "REQUEST_METHOD="+r.Method, "QUERY_STRING="+r.URL.RawQuery, "REQUEST_URI="+r.URL.RequestURI())
-	cmd.Env = env
+
+	// Standard CGI variables
+	absPath, _ := filepath.Abs(path)
+	env = append(env,
+		"REQUEST_METHOD="+r.Method,
+		"QUERY_STRING="+r.URL.RawQuery,
+		"REQUEST_URI="+r.URL.RequestURI(),
+		"SCRIPT_FILENAME="+absPath,
+		"SCRIPT_NAME="+filepath.ToSlash(r.URL.Path),
+		"SERVER_PROTOCOL=HTTP/1.1",
+		"GATEWAY_INTERFACE=CGI/1.1",
+		"SERVER_NAME="+r.Host,
+		"REMOTE_ADDR=127.0.0.1",
+	)
+
+	// Set CONTENT_TYPE and CONTENT_LENGTH for POST/PUT requests
+	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			env = append(env, "CONTENT_TYPE="+ct)
+		}
+		if cl := r.Header.Get("Content-Length"); cl != "" {
+			env = append(env, "CONTENT_LENGTH="+cl)
+		}
+	}
+
+	var cmd *exec.Cmd
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd = exec.CommandContext(ctx, php, path)
+
+	if phpMode == "cgi" {
+		// php-cgi needs a stdin for POST bodies in CGI mode
+		cmd = exec.CommandContext(ctx, phpPath, absPath)
+	} else {
+		// CLI mode: headers() won't produce HTTP headers, but still injects vars
+		cmd = exec.CommandContext(ctx, phpPath, absPath)
+	}
 	cmd.Env = env
+
+	// Pass the request body to PHP so php://input and $_POST work
+	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
+		cmd.Stdin = r.Body
+		defer r.Body.Close()
+	}
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
 	}
+
 	body := out
 	if idx := findHeaderEnd(out); idx != -1 {
 		hdrPart := string(out[:idx])
@@ -362,6 +403,13 @@ func (s *Server) servePHP(w http.ResponseWriter, r *http.Request, path string) b
 			if line == "" {
 				continue
 			}
+			// Skip CGI status lines like "Status: 200" or "HTTP/1.1 200 OK"
+			if strings.HasPrefix(line, "Status:") {
+				continue
+			}
+			if strings.HasPrefix(line, "HTTP/") {
+				continue
+			}
 			if kv := strings.SplitN(line, ":", 2); len(kv) == 2 {
 				w.Header().Set(strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]))
 			}
@@ -369,7 +417,11 @@ func (s *Server) servePHP(w http.ResponseWriter, r *http.Request, path string) b
 		if w.Header().Get("Content-Type") == "" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		}
+	} else if phpMode == "cli" {
+		// CLI mode doesn't output HTTP headers
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	} else {
+		// CGI mode without headers — output is the raw body
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
 	// Detect PHP typo: scan source for getenv/$_ENV/$_SERVER keys
@@ -407,7 +459,8 @@ func detectPHPTypo(path string, namesFunc func() []string) []string {
 		return nil
 	}
 	s := string(src)
-	re := regexp.MustCompile(`(?:getenv|\\\$_ENV|\\\$_SERVER)\s*\(\s*['"]([^'"]+)['"]\s*\)`)
+	// Match getenv("KEY"), $_ENV["KEY"], $_SERVER["KEY"]
+	re := regexp.MustCompile(`(?:getenv\s*\(|\$_ENV\s*\[|\$_SERVER\s*\[)\s*['"]([^'"]+)['"]`)
 	defined := make(map[string]bool)
 	if namesFunc != nil {
 		for _, n := range namesFunc() {
@@ -441,15 +494,12 @@ func detectPHPSecurityIssue(path string) []string {
 		return nil
 	}
 	s := string(src)
-	secretRe := regexp.MustCompile(`(getenv|\\\$_ENV|\\\$_SERVER)\s*\(`)
+	// Match echo/print/var_dump/print_r directly followed by getenv() or $_ENV[ or $_SERVER[
+	secretEchoRe := regexp.MustCompile(`\b(?:echo|print|var_dump|print_r)\s+(?:getenv\s*\(|\$_ENV\s*\[|\$_SERVER\s*\[)\s*['"]`)
 	seen := make(map[string]bool)
 	var issues []string
 	for _, line := range strings.Split(s, "\n") {
-		if !secretRe.MatchString(line) {
-			continue
-		}
-		// Check if line also has echo/print/var_dump/print_r
-		if !regexp.MustCompile(`\b(echo|print|var_dump|print_r)\b`).MatchString(line) {
+		if !secretEchoRe.MatchString(line) {
 			continue
 		}
 		for _, name := range []string{"getenv", "$_ENV", "$_SERVER"} {
@@ -512,12 +562,24 @@ func min(a, b, c int) int {
 }
 
 func findPHP() (string, error) {
-	for _, name := range []string{"php", "php8", "php8.2", "php8.1", "php7"} {
+	for _, name := range []string{"php-cgi", "php", "php8", "php81", "php8.1", "php82", "php8.2", "php83", "php8.3", "php84", "php8.4", "php7", "php74", "php7.4"} {
 		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
 		}
 	}
 	return "", os.ErrNotExist
+}
+
+func findPHPMode() (string, string) {
+	if path, err := exec.LookPath("php-cgi"); err == nil {
+		return path, "cgi"
+	}
+	for _, name := range []string{"php", "php8", "php81", "php8.2", "php82", "php8.3", "php8.3", "php84", "php8.4", "php7", "php74", "php7.4"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, "cli"
+		}
+	}
+	return "", ""
 }
 
 func findHeaderEnd(out []byte) int {
