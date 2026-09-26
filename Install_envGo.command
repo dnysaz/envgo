@@ -4,7 +4,7 @@
 
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION="20260918"
+VERSION="v1.0.4"
 CYAN="\033[36m"
 GREEN="\033[32m"
 YELLOW="\033[33m"
