@@ -88,23 +88,67 @@ sudo chmod +x /usr/local/bin/envgo
 ### Windows
 
 The `.exe` is a console application, so a Command Prompt window appearing while
-it runs is normal. Install it from a checkout with the verified PowerShell
-installer:
+it runs is normal — do **not** run it by double-clicking, because that starts the
+server and the window closes the instant the process exits. Open a terminal and
+run `envgo run dev` instead.
 
-```powershell
-powershell -NoProfile -File .\scripts\install.ps1
-```
+#### Option 1 — PowerShell installer (recommended)
 
 The installer detects AMD64/ARM64, verifies the SHA-256 entry in
 `dist/SHA256SUMS`, installs to `%LOCALAPPDATA%\Programs\envGo` without admin
-rights, and adds that directory to the user `PATH`. Verify the installer and
-binary against the checksum file before running them. A standalone copy of
-`Install_envGo.ps1` can be placed beside the Windows binary and checksum file.
-Manual installation remains available:
+rights, and adds that directory to your user `PATH`.
+
+```powershell
+# If you get "cannot be loaded because running scripts is disabled":
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\Install_envGo.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install_envGo.ps1 -Architecture amd64
+```
+
+> The `-ExecutionPolicy Bypass` flag is needed because Windows ships with the
+> `Restricted` policy, which blocks all scripts. It only applies to that single
+> run — your system policy is not changed. A standalone copy of
+> `Install_envGo.ps1` can be placed beside the Windows binary and checksum file.
+> SmartScreen may warn on first run because the binary is not code-signed —
+> choose **More info → Run anyway**. Always verify the installer and binary
+> against `SHA256SUMS` before running them.
+
+#### Option 2 — Manual install
+
+```powershell
+# 1. Place the binary (pick the one matching your CPU — most PCs use amd64):
+#    dist\envgo-windows-amd64.exe   ->   AMD64 (Intel/AMD)
+#    dist\envgo-windows-arm64.exe   ->   ARM64 (Surface Pro X, etc.)
+mkdir C:\envgo
+copy $env:USERPROFILE\Downloads\envgo-windows-amd64.exe C:\envgo\envgo.exe
+```
+
+Then add `C:\envgo` to your `PATH`. Use **either** method below.
+
+**Method A — PowerShell (no admin rights):**
+
+```powershell
+# Run once in a new PowerShell window:
+[Environment]::SetEnvironmentVariable(
+  'Path',
+  [Environment]::GetEnvironmentVariable('Path', 'User') + ';C:\envgo',
+  'User'
+)
+```
+
+**Method B — Windows GUI (visual):**
+
+1. Press **Win + R**, type `sysdm.cpl`, press **Enter**.
+2. **Advanced** tab → **Environment Variables…**.
+3. Under **User variables** select **Path** → **Edit…**.
+4. **New** → type `C:\envgo` → **OK** to close every dialog.
+5. Open a **new** PowerShell window and run `envgo -v`.
+
+> PATH changes only apply to terminals opened **after** the edit. Reopen the
+> terminal if `envgo` is not recognized.
 
 ```text
-Copy envgo-windows-amd64.exe to C:\envgo\envgo.exe
-Add C:\envgo to PATH
+envgo -v    # print version
+envgo -h    # show help
 ```
 
 ### Verify
