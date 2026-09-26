@@ -51,12 +51,16 @@ func main() {
 	isDev := false
 	initMode := false
 	deployMode := false
+	updateMode := false
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "run":
 			runMode = true
 			if len(os.Args) > 2 && os.Args[2] == "dev" {
 				isDev = true
+				os.Args = append([]string{os.Args[0]}, os.Args[3:]...)
+			} else if len(os.Args) > 2 && os.Args[2] == "update" {
+				updateMode = true
 				os.Args = append([]string{os.Args[0]}, os.Args[3:]...)
 			} else {
 				os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
@@ -120,6 +124,7 @@ func main() {
 		fmt.Println("Usage:")
 		fmt.Println("  envgo [options]                              — start server")
 		fmt.Println("  envgo run [dev] [options]                    — start dev server")
+		fmt.Println("  envgo run update                             — update envgo to latest release")
 		fmt.Println("  envgo init [options]                         — create new project template")
 		fmt.Println("  envgo deploy [options]                       — generate Caddyfile/nginx config")
 		fmt.Println()
@@ -164,6 +169,10 @@ func main() {
 	}
 	if deployMode {
 		doDeploy(deployOutputVal)
+		return
+	}
+	if updateMode {
+		doUpdate()
 		return
 	}
 
@@ -456,6 +465,7 @@ PORT=8080
 		"## Commands\n" +
 		"```bash\n" +
 		"envgo run dev                    # start dev server (reads HOST/PORT from .env)\n" +
+		"envgo run update                 # update envgo to latest release (cross-platform)\n" +
 		"envgo -h                         # show help\n" +
 		"envgo -v                         # print version\n" +
 		"envgo --tls                      # start with HTTPS (auto-generated cert)\n" +

@@ -114,6 +114,26 @@ envgo -v    # print version
 envgo -h    # show help
 ```
 
+### Update
+
+Update in place — works on macOS, Linux and Windows:
+
+```bash
+envgo run update
+# > Update envgo to latest version? Y/n
+```
+
+It queries the GitHub releases API, downloads the binary for your platform over
+HTTPS, verifies it against the release `SHA256SUMS` plus a startup self-check,
+then replaces the running binary and prints `Congrats to new version of envgo!`.
+Run it outside of a long-lived server (it never starts one). On macOS/Linux the
+rename is atomic and a running server picks up the new binary on its next
+restart; on Windows the replacement is scheduled after the current process exits.
+Honors `HTTP_PROXY`/`HTTPS_PROXY` for downloads. For offline hosts, download the
+binary from the [releases page](https://github.com/dnysaz/envgo/releases) and
+copy it over the old install path, verifying with `sha256sum -c SHA256SUMS`
+(Linux) or `shasum -a 256 -c SHA256SUMS` (macOS).
+
 ---
 
 ## Quick Start

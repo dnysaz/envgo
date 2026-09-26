@@ -451,16 +451,20 @@ func (s *Server) servePHP(w http.ResponseWriter, r *http.Request, path string) b
 	return true
 }
 
-// detectPHPTypo scans PHP source for getenv("VAR"), $_ENV["VAR"], $_SERVER["VAR"]
-// and returns names that are not defined in EnvNames.
+// detectPHPTypo scans PHP source for getenv("VAR") and $_ENV["VAR"] access
+// and returns names that are not defined in EnvNames. $_SERVER["..."] access
+// is intentionally excluded: PHP superglobals are never .env variables, so
+// legitimate uses like $_SERVER["REQUEST_METHOD"] must not trigger false
+// positives.
 func detectPHPTypo(path string, namesFunc func() []string) []string {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
 	s := string(src)
-	// Match getenv("KEY"), $_ENV["KEY"], $_SERVER["KEY"]
-	re := regexp.MustCompile(`(?:getenv\s*\(|\$_ENV\s*\[|\$_SERVER\s*\[)\s*['"]([^'"]+)['"]`)
+	// Match getenv("KEY") and $_ENV["KEY"] only. $_SERVER["KEY"] is a PHP
+	// superglobal and is not treated as an env-var reference here.
+	re := regexp.MustCompile(`(?:getenv\s*\(|\$_ENV\s*\[)\s*['"]([^'"]+)['"]`)
 	defined := make(map[string]bool)
 	if namesFunc != nil {
 		for _, n := range namesFunc() {

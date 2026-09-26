@@ -262,23 +262,22 @@ echo "Hello";
 			t.Errorf("expected no missing keys, got %v", missing)
 		}
 	})
-
-	t.Run("detects $_ENV and $_SERVER access", func(t *testing.T) {
+	t.Run("detects $_ENV access but ignores $_SERVER superglobals", func(t *testing.T) {
 		phpContent3 := `<?php
+
 echo $_ENV["DB_PASS"];
-echo $_SERVER["MISSING_VAR"];
+echo $_SERVER["REQUEST_METHOD"];
+echo $_SERVER["SERVER_SOFTWARE"];
 `
 		phpPath3 := filepath.Join(dir, "superglobal.php")
 		os.WriteFile(phpPath3, []byte(phpContent3), 0o644)
 
 		missing := detectPHPTypo(phpPath3, namesFunc)
-		if len(missing) != 2 {
-			t.Errorf("expected 2 missing keys, got %d: %v", len(missing), missing)
+		if len(missing) != 1 {
+			t.Errorf("expected only DB_PASS flagged (not $_SERVER superglobals), got %d: %v", len(missing), missing)
 		}
-		if len(missing) == 2 {
-			if missing[0] != "DB_PASS" || missing[1] != "MISSING_VAR" {
-				t.Errorf("expected [DB_PASS, MISSING_VAR], got %v", missing)
-			}
+		if len(missing) == 1 && missing[0] != "DB_PASS" {
+			t.Errorf("expected [DB_PASS], got %v", missing)
 		}
 	})
 
