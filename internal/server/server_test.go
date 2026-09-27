@@ -1,10 +1,13 @@
 package server
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -33,6 +36,15 @@ func testServer(t *testing.T, dir string) *Server {
 func do(t *testing.T, s *Server, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	req.Host = "127.0.0.1:8080"
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	return rr
+}
+
+// doHost issues a request while preserving the Host header. do() overwrites it
+// with 127.0.0.1:8080, so any test about host checking must use this instead.
+func doHost(t *testing.T, s *Server, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
 	rr := httptest.NewRecorder()
 	s.ServeHTTP(rr, req)
 	return rr
@@ -179,6 +191,99 @@ func TestDashboard(t *testing.T) {
 	if strings.Contains(body, "sk-secret") {
 		t.Fatal("dashboard data must not contain secret values")
 	}
+}
+
+// TestDashboardAllowsReachableHostsWhenBoundToAllInterfaces is the regression
+// for the 403 users hit: --qr binds an unspecified address, so the listener
+// answers on 127.0.0.1 and on the LAN IP. Both of those are the URLs envGo
+// prints and encodes into the QR code, and both were rejected.
+func TestDashboardAllowsReachableHostsWhenBoundToAllInterfaces(t *testing.T) {
+	dir := t.TempDir()
+	s := New(Options{
+		Addr:          "0.0.0.0:8080",
+		Dir:           dir,
+		Token:         "test-token",
+		Vars:          proxy.MapVars{"OPENAI_API_KEY": "sk-secret"},
+		EnvPath:       ".env",
+		EnvNames:      func() []string { return []string{"OPENAI_API_KEY"} },
+		Log:           logger.New(false),
+		History:       history.New(10),
+		ShowDashboard: true,
+	})
+
+	// Every address the listener genuinely answers on must be allowed.
+	for _, host := range []string{"0.0.0.0:8080", "127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
+		r := req(http.MethodGet, "/__envgo_dashboard")
+		r.Host = host
+		if rr := doHost(t, s, r); rr.Code != 200 {
+			t.Errorf("dashboard via %s: got %d, want 200", host, rr.Code)
+		}
+	}
+
+	// Local interface addresses are reachable too, and cover the LAN IP that
+	// --qr puts in the QR code.
+	for _, ip := range localAddresses() {
+		host := net.JoinHostPort(ip.String(), "8080")
+		r := req(http.MethodGet, "/__envgo_dashboard")
+		r.Host = host
+		if rr := doHost(t, s, r); rr.Code != 200 {
+			t.Errorf("dashboard via local address %s: got %d, want 200", host, rr.Code)
+		}
+	}
+}
+
+// TestDashboardStillRejectsUnknownHost confirms widening the allowlist did not
+// open the DNS-rebinding hole: an off-machine Host is still refused.
+func TestDashboardStillRejectsUnknownHost(t *testing.T) {
+	dir := t.TempDir()
+	s := New(Options{
+		Addr:          "0.0.0.0:8080",
+		Dir:           dir,
+		Token:         "test-token",
+		EnvPath:       ".env",
+		Log:           logger.New(false),
+		History:       history.New(10),
+		ShowDashboard: true,
+	})
+	for _, host := range []string{"evil.com", "evil.com:8080", "192.0.2.55:8080", "attacker.test:1234"} {
+		r := req(http.MethodGet, "/__envgo_dashboard")
+		r.Host = host
+		if rr := doHost(t, s, r); rr.Code != 403 {
+			t.Errorf("dashboard via %s: got %d, want 403", host, rr.Code)
+		}
+	}
+}
+
+// TestAllowedHostsIsDeterministic keeps the list order stable so it can be
+// compared in tests and reasoned about.
+func TestAllowedHostsIsDeterministic(t *testing.T) {
+	a := allowedHosts("0.0.0.0:8080")
+	b := allowedHosts("0.0.0.0:8080")
+	if !reflect.DeepEqual(a, b) {
+		t.Fatal("allowedHosts is not deterministic")
+	}
+	if !sort.StringsAreSorted(a) {
+		t.Errorf("allowedHosts is not sorted: %v", a)
+	}
+	for _, want := range []string{"0.0.0.0:8080", "127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
+		if !contains(a, want) {
+			t.Errorf("allowedHosts missing %s: %v", want, a)
+		}
+	}
+	// A specific bind address must not widen to unrelated interface addresses.
+	specific := allowedHosts("127.0.0.1:8080")
+	if contains(specific, "0.0.0.0:8080") {
+		t.Errorf("specific bind should not allow 0.0.0.0: %v", specific)
+	}
+}
+
+func contains(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDashboardRejectsEvilHost(t *testing.T) {

@@ -183,14 +183,16 @@ func main() {
 		fmt.Println("      network http://192.168.1.20:8080 (scan this one with a phone)")
 		fmt.Println("  Without --qr the server stays on 127.0.0.1 and is unreachable from other")
 		fmt.Println("  devices. Allow the port through the local firewall to scan successfully.")
-		fmt.Println("  --qr-format png writes qrcode_<ip>_<port>.png instead of printing to the")
-		fmt.Println("  terminal (handy for terminals that mangle the block characters).")
+		fmt.Println("  --qr-format png ALSO writes qrcode_<ip>_<port>.png next to your project, in")
+		fmt.Println("  addition to the terminal QR. Use it when the terminal mangles the block")
+		fmt.Println("  characters, or when you want to share the code as a file. It needs --qr;")
+		fmt.Println("  without --qr no QR is produced and the flag is ignored.")
 		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  envgo --dir . --env .env --allow httpbin.org")
 		fmt.Println("  envgo run dev                                # reads HOST/PORT/MODE_PUBLIC from .env")
 		fmt.Println("  envgo run dev --qr                           # share on LAN + QR code for phones")
-		fmt.Println("  envgo run dev --qr --qr-format png           # write the QR to a PNG file")
+		fmt.Println("  envgo run dev --qr --qr-format png           # terminal QR + a PNG file")
 		fmt.Println("  MODE_PUBLIC=true envgo run dev               # public mode via .env")
 		fmt.Println("  envgo init -name myapp                       # create project template")
 		fmt.Println("  envgo deploy -o ./deploy                     # generate Caddyfile + nginx.conf")
@@ -421,6 +423,13 @@ func main() {
 	var lanIP string
 	if shared {
 		lanIP = lan.LocalIP()
+	}
+
+	// --qr-format is easy to pass on its own and then have it do nothing, so say
+	// so instead of starting the server with no QR and no explanation.
+	if !qrVal && !strings.EqualFold(qrFormatVal, "ansi") {
+		log.Warn("--qr-format %s has no effect without --qr; no QR code will be produced", qrFormatVal)
+		log.Warn("      hint: envgo run dev --qr --qr-format %s", qrFormatVal)
 	}
 
 	var httpSrv *http.Server
@@ -763,24 +772,32 @@ func loopbackHost(host string) bool {
 	return strings.EqualFold(host, "localhost")
 }
 
+// printQRCode always draws the QR in the terminal, and additionally writes it to
+// a PNG file when format is "png".
+//
+// The PNG used to replace the terminal output rather than accompany it, which
+// left "envgo run dev --qr --qr-format png" showing nothing at all: the docs
+// describe it as the workaround for terminals that mangle the block characters,
+// yet running it removed every trace of a QR from the screen. The file is the
+// thing that helps such a user, so both are now produced.
 func printQRCode(text, format string, port int, log *logger.Logger) {
 	m, err := qr.EncodeText(text, qr.Medium)
 	if err != nil {
 		log.Error("QR encode failed: %v", err)
 		return
 	}
-	if strings.EqualFold(format, "png") {
-		name := qrFileName(text, port)
-		if err := m.PNG(name, 8); err != nil {
-			log.Error("QR PNG write failed: %v", err)
-			return
-		}
-		log.Info("QR code for %s written to %s", text, name)
-		return
-	}
 	fmt.Println()
 	fmt.Print(m.String())
 	fmt.Println("Scan with a phone on the same network to open:", text)
+	if !strings.EqualFold(format, "png") {
+		return
+	}
+	name := qrFileName(text, port)
+	if err := m.PNG(name, 8); err != nil {
+		log.Error("QR PNG write failed: %v", err)
+		return
+	}
+	log.Info("QR code also written to %s", name)
 }
 
 func qrFileName(rawURL string, port int) string {

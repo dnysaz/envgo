@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Logger writes leveled messages to stdout/stderr while never leaking
@@ -28,9 +29,31 @@ func New(debug bool) *Logger {
 	}
 }
 
-// RegisterSecret teaches the logger to redact a value.
+// minRedactLen is the shortest secret value that is matched as a plain
+// substring. Values below this are ignored on purpose: common .env values
+// such as "1", "0", "dev" or "on" occur inside every IP address, port and
+// file path that envGo prints, so redacting them replaced unrelated text and
+// left output the reader could not use. envGo never logs env values, so a
+// secret that short gains no protection from log redaction anyway.
+const minRedactLen = 4
+
+// allDigits reports whether s is a bare number. Such values are skipped as
+// secrets: they are the single largest collision class, appearing in every
+// port, byte count and version number that envGo prints, and an all-numeric
+// secret is not meaningfully protected by log redaction in any case.
+func allDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// RegisterSecret teaches the logger to redact a value. Values too short, or
+// purely numeric, are dropped; see minRedactLen and allDigits.
 func (l *Logger) RegisterSecret(value string) {
-	if value == "" {
+	if utf8.RuneCountInString(value) < minRedactLen || allDigits(value) {
 		return
 	}
 	l.mu.Lock()

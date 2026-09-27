@@ -26,6 +26,72 @@ func TestRegisterSecretIgnoresEmpty(t *testing.T) {
 	}
 }
 
+// TestRegisterSecretIgnoresShortValues pins the rule that a secret too short to
+// be matched safely is never registered. Without this, a .env holding e.g.
+// DEBUG=1 makes every log line that contains the digit 1 unreadable, which
+// includes the LAN URL, its port and the name of the generated QR PNG file.
+func TestRegisterSecretIgnoresShortValues(t *testing.T) {
+	for _, v := range []string{"1", "0", "42", "dev", "on", "yes", "a=b"} {
+		l := New(false)
+		l.RegisterSecret(v)
+		got := l.Redact("envGo network -> http://192.168.101.13:8124")
+		if got != "envGo network -> http://192.168.101.13:8124" {
+			t.Errorf("secret %q corrupted unrelated output: %q", v, got)
+		}
+	}
+}
+
+// TestRedactKeepsURLsReadable is the regression this bug produced: a QR file
+// name printed as qrcode_[REDACTED]92...png, which does not exist on disk.
+// These are the innocuous values a real .env carries and that the denylist in
+// envstore cannot enumerate.
+func TestRedactKeepsURLsReadable(t *testing.T) {
+	l := New(false)
+	l.RegisterSecretsFrom(map[string]string{"DEBUG": "1", "RETRIES": "5", "TIMEOUT": "3000"})
+	line := "[envGo] QR code for http://192.168.101.13:8124 written to qrcode_192.168.101.13_8124.png"
+	if got := l.Redact(line); got != line {
+		t.Fatalf("log line was mangled:\n got: %q\nwant: %q", got, line)
+	}
+}
+
+// TestRegisterSecretIgnoresNumericValues pins the second rule: a bare number is
+// never a redacted secret, because ports and counts contain it everywhere.
+func TestRegisterSecretIgnoresNumericValues(t *testing.T) {
+	const line = "listening on 127.0.0.1:8080 (2 files, 3000 bytes)"
+	for _, v := range []string{"8080", "3000", "5000", "12345"} {
+		l := New(false)
+		l.RegisterSecret(v)
+		if got := l.Redact(line); got != line {
+			t.Errorf("numeric value %q corrupted output: %q", v, got)
+		}
+	}
+}
+
+// TestRedactStillHidesRealSecrets keeps the protection working for values long
+// enough to match safely, so the length cutoff cannot be used to leak secrets.
+func TestRedactStillHidesRealSecrets(t *testing.T) {
+	l := New(false)
+	l.RegisterSecret("sk-live-abcdef")
+	if got := l.Redact("key=sk-live-abcdef rest"); strings.Contains(got, "sk-live-abcdef") {
+		t.Fatalf("real secret leaked: %q", got)
+	}
+}
+
+// TestRedactMinimumLengthBoundary pins the exact cutoff: three characters is
+// ignored, four is redacted.
+func TestRedactMinimumLengthBoundary(t *testing.T) {
+	l := New(false)
+	l.RegisterSecret("abc")
+	if got := l.Redact("value abc here"); got != "value abc here" {
+		t.Errorf("3-char secret should be ignored, got %q", got)
+	}
+	l2 := New(false)
+	l2.RegisterSecret("abcd")
+	if got := l2.Redact("value abcd here"); strings.Contains(got, "abcd") {
+		t.Errorf("4-char secret should be redacted, got %q", got)
+	}
+}
+
 func TestRegisterSecretsFrom(t *testing.T) {
 	l, _, _ := newTestLogger(false)
 	l.RegisterSecretsFrom(map[string]string{

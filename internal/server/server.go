@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,16 +59,74 @@ func New(o Options) *Server {
 	}
 }
 
+// allowedHosts lists the Host header values that may reach the dev-only
+// endpoints (dashboard, token, history). This is the DNS-rebinding guard, so it
+// must be a closed list — but it has to cover every address the server is
+// genuinely reachable on.
+//
+// Binding to an unspecified address (0.0.0.0, which is what --qr does) means the
+// listener answers on every local address. Restricting the list to the literal
+// bind address made the dashboard answer 403 for 127.0.0.1 and for the LAN IP,
+// which are exactly the two URLs envGo itself prints and encodes into the QR
+// code. Loopback is always allowed because a browser may reach the server as
+// either "localhost" or "127.0.0.1" regardless of the bind address.
 func allowedHosts(addr string) []string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return []string{addr}
 	}
-	return []string{
-		addr,
-		net.JoinHostPort("localhost", port),
-		net.JoinHostPort(host, port),
+	seen := make(map[string]bool)
+	add := func(h string) {
+		if h != "" {
+			seen[h] = true
+		}
 	}
+	add(addr)
+	add(net.JoinHostPort(host, port))
+	for _, h := range []string{"localhost", "127.0.0.1", "::1"} {
+		add(net.JoinHostPort(h, port))
+	}
+	// An unspecified bind address accepts connections on every interface, so
+	// every local address the machine has is a legitimate Host.
+	if ip := net.ParseIP(host); ip == nil || ip.IsUnspecified() {
+		for _, a := range localAddresses() {
+			add(net.JoinHostPort(a.String(), port))
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for h := range seen {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// localAddresses returns every IP assigned to an up interface, loopback
+// included. It is used only to widen the host allowlist to match reality.
+func localAddresses() []net.IP {
+	var out []net.IP
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			switch v := a.(type) {
+			case *net.IPNet:
+				out = append(out, v.IP)
+			case *net.IPAddr:
+				out = append(out, v.IP)
+			}
+		}
+	}
+	return out
 }
 
 func hostPortOnly(addr string) string {

@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"envgo/internal/logger"
 )
 
 func TestSplitAllow(t *testing.T) {
@@ -442,6 +444,47 @@ func TestQRFileName(t *testing.T) {
 	}
 	if got := qrFileName("not a url", 1234); strings.ContainsAny(got, " /\\") {
 		t.Errorf("filename %s contains unsafe characters", got)
+	}
+}
+
+// TestPrintQRCodePNGRendersTerminalToo is the regression for the reported bug:
+// "envgo run dev --qr --qr-format png" produced a file and no visible QR. The
+// PNG is the workaround for terminals that mangle block characters, so it must
+// accompany the terminal QR rather than replace it.
+func TestPrintQRCodePNGRendersTerminalToo(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	url := "http://192.168.1.20:8080"
+
+	out := captureStdout(t, func() {
+		printQRCode(url, "png", 8080, logger.New(false))
+	})
+
+	// A QR was drawn on screen...
+	if !strings.Contains(out, "Scan with a phone") {
+		t.Errorf("png format suppressed the terminal output; got:\n%s", out)
+	}
+	if !strings.Contains(out, "▀") || !strings.Contains(out, "▄") {
+		t.Errorf("png format suppressed the QR glyphs; got:\n%s", out)
+	}
+	// ...and the PNG file exists too.
+	if _, err := os.Stat("qrcode_192.168.1.20_8080.png"); err != nil {
+		t.Errorf("PNG was not written: %v", err)
+	}
+}
+
+// TestPrintQRCodeANSIWritesNoFile keeps the default behaviour free of files.
+func TestPrintQRCodeANSIWritesNoFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	out := captureStdout(t, func() {
+		printQRCode("http://192.168.1.20:8080", "ansi", 8080, logger.New(false))
+	})
+	if !strings.Contains(out, "▀") {
+		t.Errorf("ansi format did not render the QR:\n%s", out)
+	}
+	if _, err := os.Stat("qrcode_192.168.1.20_8080.png"); err == nil {
+		t.Error("ansi format should not write a PNG")
 	}
 }
 
