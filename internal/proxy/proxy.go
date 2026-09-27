@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"envbridge/internal/history"
+	"envgo/internal/history"
 )
 
 var varRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)

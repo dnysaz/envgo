@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"envbridge/internal/logger"
+	"envgo/internal/logger"
 )
 
 func write(t *testing.T, path, content string, mod time.Time) {

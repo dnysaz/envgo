@@ -5,7 +5,7 @@ set -euo pipefail
 # Builds from source (CGO_ENABLED=0) and installs to ~/.local/bin/envgo by default.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-$(git -C "$ROOT" describe --tags --always 2>/dev/null || date +%Y%m%d)}"
+VERSION="${VERSION:-$(git -C "$ROOT" describe --tags --always 2>/dev/null | sed 's/^v//' || date +%Y%m%d)}"
 DEFAULT_PREFIX="$HOME/.local/bin"
 CYAN="\033[36m"
 GREEN="\033[32m"
@@ -15,14 +15,17 @@ GO="${GO:-go}"
 
 print_banner() {
   echo -e "${CYAN}"
-  cat <<'BANNER'
-   ____              ____
-  | __|_ _   __ __  / __| ___
-  | _| | ' \/ _` | | |  / _ \
-  |___|_|_|_\__,_|  \_| \___/
-BANNER
-  echo -e "${RESET}  envGo v${VERSION} — Secure .env runtime for HTML/Vanilla JS"
-  echo "  Zero-dependency micro-runtime • https://github.com/dnysaz/envgo"
+  cat <<'LOGO'
+                 ▄▄
+                █▀▀▌
+ ▟█▙ ▐▙██▖▐▙ ▟▌▐▌    ▟█▙
+▐▙▄▟▌▐▛ ▐▌ █ █ ▐▌▗▄▖▐▛ ▜▌
+▐▛▀▀▘▐▌ ▐▌ ▜▄▛ ▐▌▝▜▌▐▌ ▐▌
+▝█▄▄▌▐▌ ▐▌ ▐█▌  █▄▟▌▝█▄█▘
+ ▝▀▀ ▝▘ ▝▘  ▀    ▀▀  ▝▀▘
+LOGO
+  echo -e "${RESET}  envGo v${VERSION} — Secure .env runtime for HTML/Vanilla JS/PHP"
+  echo "  Zero-dependency micro-runtime • https://envgo.dev"
   echo ""
 }
 

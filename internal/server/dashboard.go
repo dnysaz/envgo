@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"envbridge/internal/history"
+	"envgo/internal/history"
 )
 
 const dashboardHTML = `<!DOCTYPE html>

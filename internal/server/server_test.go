@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"envbridge/internal/gateway"
-	"envbridge/internal/history"
-	"envbridge/internal/logger"
-	"envbridge/internal/proxy"
+	"envgo/internal/gateway"
+	"envgo/internal/history"
+	"envgo/internal/logger"
+	"envgo/internal/proxy"
 )
 
 func testServer(t *testing.T, dir string) *Server {

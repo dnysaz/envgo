@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"envbridge/internal/history"
-	"envbridge/internal/proxy"
-	"envbridge/internal/ratelimit"
+	"envgo/internal/history"
+	"envgo/internal/proxy"
+	"envgo/internal/ratelimit"
 )
 
 var varRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -54,9 +54,9 @@ type compiled struct {
 func New(cfg *Config, vars proxy.VarSource, log Logger, hist *history.History) *Gateway {
 	defLimit, defPeriod, _ := ratelimit.Parse(cfg.DefaultRateLimit)
 	g := &Gateway{
-		cfg:     cfg,
-		vars:    vars,
-		log:     log,
+		cfg:  cfg,
+		vars: vars,
+		log:  log,
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {

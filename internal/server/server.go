@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"envbridge/internal/gateway"
-	"envbridge/internal/history"
-	"envbridge/internal/hotreload"
-	"envbridge/internal/logger"
-	"envbridge/internal/proxy"
+	"envgo/internal/gateway"
+	"envgo/internal/history"
+	"envgo/internal/hotreload"
+	"envgo/internal/logger"
+	"envgo/internal/proxy"
 )
 
 type Options struct {
@@ -593,20 +593,14 @@ func min(a, b, c int) int {
 	return c
 }
 
-func findPHP() (string, error) {
-	for _, name := range []string{"php-cgi", "php", "php8", "php81", "php8.1", "php82", "php8.2", "php83", "php8.3", "php84", "php8.4", "php7", "php74", "php7.4"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p, nil
-		}
-	}
-	return "", os.ErrNotExist
-}
-
+// findPHPMode locates a PHP interpreter. php-cgi is preferred because it honours
+// header() and can emit a real status line; the plain CLI binary is the fallback
+// for macOS/Homebrew installs, which no longer ship php-cgi.
 func findPHPMode() (string, string) {
 	if path, err := exec.LookPath("php-cgi"); err == nil {
 		return path, "cgi"
 	}
-	for _, name := range []string{"php", "php8", "php81", "php8.2", "php82", "php8.3", "php8.3", "php84", "php8.4", "php7", "php74", "php7.4"} {
+	for _, name := range []string{"php", "php8", "php81", "php8.1", "php82", "php8.2", "php83", "php8.3", "php84", "php8.4", "php7", "php74", "php7.4"} {
 		if path, err := exec.LookPath(name); err == nil {
 			return path, "cli"
 		}

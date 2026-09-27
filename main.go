@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -23,26 +24,36 @@ import (
 	"syscall"
 	"time"
 
-	"envbridge/internal/envstore"
-	"envbridge/internal/gateway"
-	"envbridge/internal/history"
-	"envbridge/internal/hotreload"
-	"envbridge/internal/logger"
-	"envbridge/internal/server"
-	"envbridge/internal/token"
+	"envgo/internal/envstore"
+	"envgo/internal/gateway"
+	"envgo/internal/history"
+	"envgo/internal/hotreload"
+	"envgo/internal/lan"
+	"envgo/internal/logger"
+	"envgo/internal/qr"
+	"envgo/internal/server"
+	"envgo/internal/token"
 )
 
 var version = "dev"
 
+// logo is the envGo wordmark, drawn with Unicode half-block glyphs. The same
+// shape is repeated in Install_envGo.command and scripts/install.sh, so change
+// all three together.
+const logo = `  
+                 ▄▄
+                █▀▀▌
+ ▟█▙ ▐▙██▖▐▙ ▟▌▐▌    ▟█▙
+▐▙▄▟▌▐▛ ▐▌ █ █ ▐▌▗▄▖▐▛ ▜▌
+▐▛▀▀▘▐▌ ▐▌ ▜▄▛ ▐▌▝▜▌▐▌ ▐▌
+▝█▄▄▌▐▌ ▐▌ ▐█▌  █▄▟▌▝█▄█▘
+ ▝▀▀ ▝▘ ▝▘  ▀    ▀▀  ▝▀▘`
+
 func printBanner() {
 	fmt.Print("\033[36m")
-	fmt.Println(" ____        ")
-	fmt.Println("   ___ _ ____   __/ ___| ___  ")
-	fmt.Println("  / _ \\ '_ \\ \\ / / |  _ / _ \\ ")
-	fmt.Println(" |  __/ | | \\ V /| |_| | (_) |")
-	fmt.Println("  \\___|_| |_|\\_/  \\____|\\___/ ")
-	fmt.Print("\033[0m")
-	fmt.Printf("  envGo v%s — Zero-dependency micro-runtime for HTML/Vanilla JS\n", version)
+	fmt.Print(logo)
+	fmt.Print("\033[0m\n")
+	fmt.Printf("  envGo v%s — Zero-dependency micro-runtime for HTML/Vanilla JS/PHP\n", version)
 	fmt.Println("  Secure .env injection — secrets never reach the browser")
 	fmt.Println()
 }
@@ -54,6 +65,10 @@ func main() {
 	deployMode := false
 	updateMode := false
 	cacheMode := false
+	// Captured before the subcommand switch rewrites os.Args: a bare "envgo"
+	// with nothing after it should print help instead of silently starting a
+	// server on 127.0.0.1 with default settings, which looks like a hang.
+	bareInvocation := len(os.Args) == 1
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "run":
@@ -108,6 +123,8 @@ func main() {
 		tlsVal          bool
 		initNameVal     string
 		deployOutputVal string
+		qrVal           bool
+		qrFormatVal     string
 	)
 
 	flag.IntVar(&portVal, "port", 8080, "port to listen on")
@@ -133,15 +150,19 @@ func main() {
 	flag.BoolVar(&tlsVal, "tls", false, "enable HTTPS with auto-generated self-signed certificate")
 	flag.StringVar(&initNameVal, "name", "", "project name for envgo init (empty = current directory)")
 	flag.StringVar(&deployOutputVal, "o", "", "output directory for deploy configs (default: ./deploy)")
+	flag.BoolVar(&qrVal, "qr", false, "share on the local network: bind all interfaces and print a scannable QR code of the LAN URL")
+	flag.StringVar(&qrFormatVal, "qr-format", "ansi", "QR output format: ansi (terminal) or png (file)")
 
 	flag.Usage = func() {
 		printBanner()
 		fmt.Println("Usage:")
-		fmt.Println("  envgo [options]                              — start server")
+		fmt.Println("  envgo -e .env [options]                      — start server")
 		fmt.Println("  envgo run [dev] [options]                    — start dev server")
 		fmt.Println("  envgo run update                             — update envgo to latest release")
 		fmt.Println("  envgo init [options]                         — create new project template")
 		fmt.Println("  envgo deploy [options]                       — generate Caddyfile/nginx config")
+		fmt.Println()
+		fmt.Println("  Run envgo with no arguments to see this help.")
 		fmt.Println()
 		fmt.Println("Options:")
 		flag.PrintDefaults()
@@ -152,9 +173,24 @@ func main() {
 		fmt.Println("  CONFIG / ENVGO_CONFIG / ROUTES = path to routes JSON (enables public mode)")
 		fmt.Println("  Flag --config always wins over .env")
 		fmt.Println()
+		fmt.Println("Network sharing:")
+		fmt.Println("  envgo run dev --qr")
+		fmt.Println("    Binds 0.0.0.0 so other devices on the same Wi-Fi/LAN can reach the")
+		fmt.Println("    server, then prints a QR code. The QR always encodes the LAN address")
+		fmt.Println("    (192.168.x.x), never 127.0.0.1 — only the host part changes, the port")
+		fmt.Println("    stays whatever .env/--port says. Both URLs are shown in the terminal:")
+		fmt.Println("      local   http://127.0.0.1:8080   (this machine)")
+		fmt.Println("      network http://192.168.1.20:8080 (scan this one with a phone)")
+		fmt.Println("  Without --qr the server stays on 127.0.0.1 and is unreachable from other")
+		fmt.Println("  devices. Allow the port through the local firewall to scan successfully.")
+		fmt.Println("  --qr-format png writes qrcode_<ip>_<port>.png instead of printing to the")
+		fmt.Println("  terminal (handy for terminals that mangle the block characters).")
+		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  envgo --dir . --env .env --allow httpbin.org")
 		fmt.Println("  envgo run dev                                # reads HOST/PORT/MODE_PUBLIC from .env")
+		fmt.Println("  envgo run dev --qr                           # share on LAN + QR code for phones")
+		fmt.Println("  envgo run dev --qr --qr-format png           # write the QR to a PNG file")
 		fmt.Println("  MODE_PUBLIC=true envgo run dev               # public mode via .env")
 		fmt.Println("  envgo init -name myapp                       # create project template")
 		fmt.Println("  envgo deploy -o ./deploy                     # generate Caddyfile + nginx.conf")
@@ -176,6 +212,10 @@ func main() {
 	if showVerVal {
 		printBanner()
 		fmt.Println("envGo " + version)
+		return
+	}
+	if bareInvocation {
+		flag.Usage()
 		return
 	}
 	if initMode {
@@ -211,26 +251,34 @@ func main() {
 	}
 
 	if runMode {
-		if h, ok := store.Get("HOST"); ok && h != "" && hostVal == "127.0.0.1" {
-			hostVal = strings.TrimSpace(h)
-			log.Info("using HOST from .env: %s", hostVal)
-		} else if h, ok := store.Get("host"); ok && h != "" && hostVal == "127.0.0.1" {
-			hostVal = strings.TrimSpace(h)
-			log.Info("using HOST from .env: %s", hostVal)
+		for _, k := range []string{"HOST", "host"} {
+			if v, ok := store.Get(k); ok && strings.TrimSpace(v) != "" && hostVal == "127.0.0.1" {
+				hostVal = strings.TrimSpace(v)
+				log.Info("using HOST from .env: %s", hostVal)
+				break
+			}
 		}
-		if pStr, ok := store.Get("PORT"); ok && pStr != "" && portVal == 8080 {
-			pStr = strings.TrimSpace(strings.TrimPrefix(pStr, ":"))
-			if p, err := strconv.Atoi(pStr); err == nil {
+		for _, k := range []string{"PORT", "port"} {
+			v, ok := store.Get(k)
+			if !ok || strings.TrimSpace(v) == "" || portVal != 8080 {
+				continue
+			}
+			if p, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), ":"))); err == nil {
 				portVal = p
 				log.Info("using PORT from .env: %d", portVal)
 			}
-		} else if pStr, ok := store.Get("port"); ok && pStr != "" && portVal == 8080 {
-			pStr = strings.TrimSpace(strings.TrimPrefix(pStr, ":"))
-			if p, err := strconv.Atoi(pStr); err == nil {
-				portVal = p
-				log.Info("using PORT from .env: %d", portVal)
-			}
+			break
 		}
+	}
+
+	// --qr shares the server on the local network, so a loopback bind is promoted
+	// to all interfaces. The port is never touched: only the host part changes,
+	// which is what makes the QR point at the LAN address instead of 127.0.0.1.
+	// A HOST pinned to a specific LAN IP is left alone, and so is an explicit
+	// --host flag, because both are deliberate user choices.
+	if qrVal && loopbackHost(hostVal) {
+		log.Info("--qr: binding all interfaces so other devices on this network can connect")
+		hostVal = "0.0.0.0"
 	}
 
 	checkEnvExampleSync(envPathVal)
@@ -358,9 +406,28 @@ func main() {
 		HotReload:     broadcaster,
 	})
 
+	scheme := "http"
+	if tlsVal {
+		scheme = "https"
+	}
+
+	// A wildcard bind has no dialable URL, so print loopback for it: the printed
+	// link is always one you can actually click on the machine running envGo.
+	localURL := scheme + "://" + net.JoinHostPort(hostForDisplay(addr.IP), strconv.Itoa(addr.Port))
+
+	// Sharing happens either because --qr was asked for, or because the host was
+	// explicitly bound to every interface.
+	shared := qrVal || addr.IP.IsUnspecified()
+	var lanIP string
+	if shared {
+		lanIP = lan.LocalIP()
+	}
+
 	var httpSrv *http.Server
 	if tlsVal {
-		cert, key := generateSelfSignedCert()
+		// Include the LAN address in the certificate, otherwise a phone scanning
+		// the QR over HTTPS gets both an untrusted issuer and a name mismatch.
+		cert, key := generateSelfSignedCert(lanIP)
 		_ = ln.Close()
 		tlsCert, err := tls.X509KeyPair(cert, key)
 		if err != nil {
@@ -373,7 +440,7 @@ func main() {
 			log.Error("tls listen on %s: %v", addr, err)
 			os.Exit(1)
 		}
-		log.Info("envGo HTTPS running -> https://%s/", addr)
+		log.Info("envGo HTTPS running -> %s/", localURL)
 		httpSrv = &http.Server{Addr: addr.String(), Handler: srv}
 		go func() {
 			if err := httpSrv.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
@@ -383,7 +450,7 @@ func main() {
 		}()
 	} else {
 		httpSrv = &http.Server{Addr: addr.String(), Handler: srv}
-		log.Info("envGo running -> http://%s/", addr)
+		log.Info("envGo running -> %s/", localURL)
 		go func() {
 			if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Error("server error: %v", err)
@@ -395,9 +462,22 @@ func main() {
 	if openBrowserVal {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
-			scheme := "https"; if !tlsVal { scheme = "http" }
-			_ = openBrowser(scheme + "://" + addr.String() + "/")
+			_ = openBrowser(localURL + "/")
 		}()
+	}
+
+	if shared {
+		if lanIP == "" {
+			log.Warn("no local-network IPv4 address found on this machine")
+			log.Warn("      the server is reachable at %s only", localURL)
+			log.Warn("      connect this machine to Wi-Fi/Ethernet, or pass --host <LAN-IP> to bind one directly")
+		} else {
+			lanURL := scheme + "://" + net.JoinHostPort(lanIP, strconv.Itoa(addr.Port))
+			log.Info("envGo network -> %s   (same network only)", lanURL)
+			if qrVal {
+				printQRCode(lanURL, qrFormatVal, addr.Port, log)
+			}
+		}
 	}
 
 	stop := make(chan os.Signal, 1)
@@ -410,19 +490,36 @@ func main() {
 	_ = httpSrv.Shutdown(ctx)
 }
 
+// initProjectDir resolves where `envgo init [name]` writes and creates it. An
+// empty name, or one equal to the current directory's base, means "scaffold in
+// place" and never creates a subdirectory. It reports problems as an error
+// rather than exiting, which keeps the overwrite guard testable.
+func initProjectDir(name string) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	if name == "" || name == filepath.Base(cwd) {
+		return cwd, nil
+	}
+	dir := filepath.Join(cwd, name)
+	if _, err := os.Stat(dir); err == nil {
+		return "", fmt.Errorf("directory %s already exists", dir)
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("creating directory: %w", err)
+	}
+	return dir, nil
+}
+
 func doInit(name string) {
 	cwd, _ := os.Getwd()
-	dir := cwd
-	if name != "" && name != filepath.Base(cwd) {
-		dir = filepath.Join(cwd, name)
-		if _, err := os.Stat(dir); err == nil {
-			fmt.Fprintf(os.Stderr, "Error: directory %s already exists\n", dir)
-			os.Exit(1)
-		}
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating dir: %v\n", err)
-			os.Exit(1)
-		}
+	nested := name != "" && name != filepath.Base(cwd)
+
+	dir, err := initProjectDir(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	envContent := `# envGo project
@@ -435,6 +532,8 @@ PORT=8080
 # CONFIG=envgo.routes.json  # optional: explicit routes file (overrides MODE_PUBLIC)
 
 `
+	// The example is the committed template, so it carries no real values. Keeping
+	// it identical to .env would defeat the drift check in checkEnvExampleSync.
 	envExampleContent := `# envGo project
 # Copy to .env and fill in real values. NEVER commit the real .env.
 
@@ -454,12 +553,9 @@ PORT=8080
 		os.Exit(1)
 	}
 
-	title := name
-	if title == "" {
-		title = ""
-	}
-	if title != "" {
-		title = title + " — "
+	title := ""
+	if name != "" {
+		title = name + " — "
 	}
 	htmlContent := "<!DOCTYPE html>\n<html>\n<head><title>" + title + "envGo</title></head>\n<body>\n<h1>Hello from envGo!</h1>\n<div id=\"MY_SECRET\"></div>\n<script src=\"/__env.js\"></script>\n</body>\n</html>"
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(htmlContent), 0644); err != nil {
@@ -474,7 +570,7 @@ PORT=8080
 	}
 
 	readmeQuickStart := "envgo run dev"
-	if name != "" && name != filepath.Base(cwd) {
+	if nested {
 		readmeQuickStart = "cd " + name + " && envgo run dev"
 	}
 	readmeContent := "# envGo\n\n" +
@@ -524,7 +620,7 @@ PORT=8080
 		"- `.gitignore` — ignores `.env`\n" +
 		"- `index.html` — your website with `<div id=\"KEY\">` elements\n" +
 		"- `index.php` — optional PHP files with server-side .env access\n"
-if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContent), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing README.md: %v\n", err)
 		os.Exit(1)
 	}
@@ -536,7 +632,7 @@ if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContent), 0
 	fmt.Println("  index.html")
 	fmt.Println("  README.md")
 	fmt.Println()
-	if name != "" && name != filepath.Base(cwd) {
+	if nested {
 		fmt.Println("cd", name, "&& envgo run dev")
 	} else {
 		fmt.Println("envgo run dev")
@@ -609,21 +705,26 @@ CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 	fmt.Println("Copy envGo binary + deploy/ to your server")
 }
 
-func generateSelfSignedCert() ([]byte, []byte) {
+func generateSelfSignedCert(lanIP string) ([]byte, []byte) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "generate RSA key: %v\n", err)
 		os.Exit(1)
 	}
+	ips := []net.IP{net.ParseIP("127.0.0.1")}
+	// The LAN address needs its own SAN or phones will refuse the certificate.
+	if ip := net.ParseIP(lanIP); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+		ips = append(ips, ip)
+	}
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{Organization: []string{"envGo"}},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:  []string{"localhost"},
+		Subject:      pkix.Name{Organization: []string{"envGo"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  ips,
+		DNSNames:     []string{"localhost"},
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
@@ -633,6 +734,69 @@ func generateSelfSignedCert() ([]byte, []byte) {
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
 	return certPEM, keyPEM
+}
+
+// hostForDisplay maps a bind address to something a browser can open. A
+// wildcard bind accepts any destination, so there is nothing meaningful to
+// print; loopback is the honest answer for "this machine only".
+func hostForDisplay(ip net.IP) string {
+	if ip == nil || ip.IsUnspecified() {
+		return "127.0.0.1"
+	}
+	return ip.String()
+}
+
+// loopbackHost reports whether a bind host is reachable from this machine
+// alone, i.e. the network has to be widened before a phone can connect.
+func loopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return true
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return strings.EqualFold(host, "localhost")
+}
+
+func printQRCode(text, format string, port int, log *logger.Logger) {
+	m, err := qr.EncodeText(text, qr.Medium)
+	if err != nil {
+		log.Error("QR encode failed: %v", err)
+		return
+	}
+	if strings.EqualFold(format, "png") {
+		name := qrFileName(text, port)
+		if err := m.PNG(name, 8); err != nil {
+			log.Error("QR PNG write failed: %v", err)
+			return
+		}
+		log.Info("QR code for %s written to %s", text, name)
+		return
+	}
+	fmt.Println()
+	fmt.Print(m.String())
+	fmt.Println("Scan with a phone on the same network to open:", text)
+}
+
+func qrFileName(rawURL string, port int) string {
+	host := rawURL
+	if u, err := url.Parse(rawURL); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, host)
+	return fmt.Sprintf("qrcode_%s_%d.png", safe, port)
 }
 
 func listenOn(host string, port, attempts int) (net.Listener, *net.TCPAddr, error) {

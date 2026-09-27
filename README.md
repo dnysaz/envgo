@@ -153,6 +153,26 @@ envgo -h    # show help
 
 ### Verify
 
+Confirm the download is intact before trusting it. All three installers
+(`Install_envGo.command`, `scripts/install.sh`, `scripts/install.ps1`) look for
+`SHA256SUMS` next to the binary and abort on a mismatch — including after the
+binary's own `-h` startup check, in case the file changed mid-install. The macOS
+zips ship `SHA256SUMS` inside, so the double-click installer verifies too. If the
+manifest is missing, the installer says so instead of pretending it checked.
+
+To verify by hand:
+
+```bash
+# Linux
+sha256sum -c SHA256SUMS
+# macOS
+shasum -a 256 -c SHA256SUMS
+# Windows (PowerShell)
+Get-FileHash -Algorithm SHA256 .\envgo-windows-amd64.exe
+```
+
+Then confirm the binary runs:
+
 ```bash
 envgo -v    # print version
 envgo -h    # show help
@@ -620,6 +640,66 @@ command from within a dev session.
 
 ---
 
+## Phone / LAN Access (QR Code)
+
+By default envGo binds `127.0.0.1`, so nothing on your network can reach it.
+To open the same dev server on your phone, add `--qr`:
+
+```bash
+envgo run dev --qr
+```
+
+`--qr` does everything needed for LAN sharing in one flag:
+
+1. Binds **all interfaces** (`0.0.0.0`) instead of loopback, so other devices
+   can connect. A `--host` you set explicitly always wins.
+2. Prints **both** URLs, so you can see at a glance which is which.
+3. Prints a **QR code** of the LAN URL — scan it with your phone's camera and
+   the page opens.
+
+```
+[envGo] envGo running -> http://127.0.0.1:8080/
+[envGo] envGo network -> http://192.168.1.20:8080   (same network only)
+
+██████████████  ▄▄▄▄▄  ██████████████
+...
+Scan with a phone on the same network to open: http://192.168.1.20:8080
+```
+
+**Only the host part changes — the port always comes from `.env` or `--port`.**
+`PORT=3000` in `.env` gives you `http://127.0.0.1:3000` and
+`http://192.168.x.x:3000`. That is deliberate: the QR must encode a LAN address
+or a phone scanning it would try to reach its own loopback interface, which
+resolves to the phone and fails. The local URL is still printed so you can keep
+using it on the machine you are sitting at.
+
+Notes:
+
+- The QR always encodes `192.168.x.x`-style output from the LAN interface that is
+  up and non-loopback. Link-local (`169.254.x.x`), multicast, and IPv6-only
+  interfaces are skipped, since phones cannot reach them.
+- If no LAN address exists, envGo says so instead of printing a QR that cannot
+  work, and keeps serving on loopback.
+- macOS may ask for permission to accept incoming connections the first time.
+  If the phone cannot connect, allow `envgo` in **System Settings → Network →
+  Firewall → Options**, and check the router is not isolating clients
+  (guest networks often do).
+- With `--tls` the self-signed certificate includes the LAN address, so the
+  hostname matches, but the phone will still warn that the issuer is unknown.
+- `--qr-format png` writes `qrcode_<ip>_<port>.png` instead of drawing in the
+  terminal — useful when the terminal mangles the block characters.
+
+Plain LAN sharing without a QR (for example to type the URL on a device by
+hand) needs no flag at all:
+
+```bash
+envgo run dev --host 0.0.0.0
+# → envGo running -> http://127.0.0.1:8080/
+# → envGo network -> http://192.168.1.20:8080   (same network only)
+```
+
+---
+
 ## Dashboard
 
 Open `http://127.0.0.1:8080/__envgo_dashboard` to see:
@@ -636,7 +716,9 @@ Enable with `--dashboard` flag.
 
 | Command | Description |
 |---------|-------------|
+| `envgo` | Show help (a bare `envgo` never starts a server) |
 | `envgo run dev` | Start dev server, read HOST/PORT from .env, auto-open browser |
+| `envgo run dev --qr` | Same, but share on your local network and print a QR code |
 | `envgo run update` | Check for and install the latest envgo release |
 | `envgo cache clear` | Broadcast a hard-reload to all dev-server browser tabs |
 | `envgo init` | Create new project template in current directory |
@@ -658,9 +740,14 @@ Enable with `--dashboard` flag.
 | `--dashboard` | `-D` | Enable metadata dashboard |
 | `--tls` | | Enable HTTPS with auto-generated cert |
 | `--browser` | `-b` | Open browser automatically |
+| `--qr` | | Bind all interfaces and print a QR code of the LAN URL |
+| `--qr-format` | | `ansi` (terminal, default) or `png` (write a file) |
 | `--debug` | | Verbose logging |
 | `--version` | `-v` | Print version |
 | `--help` | `-h` | Show help |
+
+The module is named `envgo` and imports are `envgo/internal/...`. There are no
+third-party dependencies, so there is no `go.sum`.
 
 ### `.env` overrides (no flag needed)
 
@@ -701,6 +788,9 @@ internal/proxy         injection + outbound engine
 internal/ratelimit     fixed-window rate limiter
 internal/history       in-memory request log
 internal/logger        redacting logger
+internal/hotreload     SSE broadcaster for browser live reload
+internal/lan           local-network IPv4 discovery for --qr
+internal/qr            QR encoder (Model 2) + PNG writer, written from scratch
 scripts/               install.sh, install.ps1
 dist/                  verified Windows/Linux output plus preserved macOS artifacts
 ```
@@ -715,7 +805,7 @@ dist/                  verified Windows/Linux output plus preserved macOS artifa
 | SSRF | Proxy denied when `--allow` is empty |
 | Abuse of fixed routes | Per-route `vars` allow-set + `rate_limit` + optional auth |
 | Upstream secret leak | `scrub_response` redacts secrets from API responses |
-| LAN access | Bound to `127.0.0.1` only |
+| LAN access | Bound to `127.0.0.1` only. `--qr` and `--host 0.0.0.0` are the only ways to widen it, and neither is used by default |
 | TLS downgrade | MinVersion TLS 1.2 when using `--tls` |
 | PHP code execution | 30s timeout, typo detection, security warning |
 
@@ -738,10 +828,12 @@ third-party dependencies** (the standard library is the whole toolkit) and
 **secrets must never reach the client**.
 
 ```bash
-make build    # build ./envgo
-make test     # run the test suite
-make vet      # run go vet
-make release  # rebuild verified Windows/Linux binaries in dist/
+make build      # build ./envgo
+make test       # run the test suite
+make vet        # run go vet
+make version    # print the single source of truth for the version
+make release    # rebuild verified Windows/Linux binaries in dist/ (run on any OS)
+make dist-macos # build both macOS binaries, repack the zips, refresh SHA256SUMS (macOS host only)
 ```
 
 ## License

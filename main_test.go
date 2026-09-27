@@ -2,10 +2,12 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -166,29 +168,61 @@ func TestDoInit(t *testing.T) {
 		}
 	})
 
-	t.Run("existing directory exits", func(t *testing.T) {
+	t.Run("refuses to overwrite an existing directory", func(t *testing.T) {
 		cwd, _ := os.Getwd()
 		defer os.Chdir(cwd)
 
 		tmpDir := t.TempDir()
 		os.Chdir(tmpDir)
 
-		// Create a directory that matches the name
 		if err := os.Mkdir("conflict", 0o755); err != nil {
 			t.Fatal(err)
 		}
+		// A file with the same name must be refused too, not just a directory.
+		if err := os.WriteFile("clash", []byte("hi"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
-		defer func() {
-			if r := recover(); r == nil {
-				// doInit calls os.Exit, which won't trigger in test directly
-				// We just verify the function was reached
-			}
-		}()
+		if _, err := initProjectDir("conflict"); err == nil {
+			t.Fatal("expected an error for an existing directory, got nil")
+		} else if !contains(err.Error(), "already exists") {
+			t.Errorf("expected an 'already exists' error, got %v", err)
+		}
+		if _, err := initProjectDir("clash"); err == nil {
+			t.Fatal("expected an error for an existing file, got nil")
+		}
 
-		// doInit will try to exit — this is expected behavior
-		// We can't easily test os.Exit, so we just verify the dir exists check
-		if _, err := os.Stat("conflict"); os.IsNotExist(err) {
-			t.Fatal("conflict dir should exist")
+		// The refusal must leave the existing directory untouched.
+		entries, err := os.ReadDir("conflict")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Errorf("expected the existing directory to be left empty, found %d entries", len(entries))
+		}
+	})
+
+	t.Run("empty name scaffolds in place without creating a subdirectory", func(t *testing.T) {
+		cwd, _ := os.Getwd()
+		defer os.Chdir(cwd)
+
+		tmpDir := t.TempDir()
+		os.Chdir(tmpDir)
+
+		dir, err := initProjectDir("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		resolved, _ := filepath.EvalSymlinks(tmpDir)
+		got, _ := filepath.EvalSymlinks(dir)
+		if got != resolved {
+			t.Errorf("expected %s, got %s", resolved, got)
+		}
+		// A name matching the current directory's base must behave the same way.
+		if dir, err := initProjectDir(filepath.Base(tmpDir)); err != nil {
+			t.Errorf("unexpected error for matching name: %v", err)
+		} else if got, _ := filepath.EvalSymlinks(dir); got != resolved {
+			t.Errorf("expected %s, got %s", resolved, got)
 		}
 	})
 }
@@ -289,7 +323,9 @@ func TestListenOn(t *testing.T) {
 }
 
 func TestGenerateSelfSignedCert(t *testing.T) {
-	certPEM, keyPEM := generateSelfSignedCert()
+	// A LAN address is passed in so the certificate covers the IP a phone
+	// actually dials after scanning the QR code.
+	certPEM, keyPEM := generateSelfSignedCert("192.168.1.20")
 
 	if len(certPEM) == 0 {
 		t.Error("certPEM should not be empty")
@@ -313,6 +349,99 @@ func TestGenerateSelfSignedCert(t *testing.T) {
 	}
 	if len(tlsCert.Certificate) == 0 {
 		t.Error("certificate chain should not be empty")
+	}
+
+	leaf, err := x509.ParseCertificate(tlsCert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate failed: %v", err)
+	}
+	if err := leaf.VerifyHostname("192.168.1.20"); err != nil {
+		t.Errorf("certificate should be valid for the LAN address: %v", err)
+	}
+	if err := leaf.VerifyHostname("127.0.0.1"); err != nil {
+		t.Errorf("certificate should be valid for loopback: %v", err)
+	}
+}
+
+func TestGenerateSelfSignedCertWithoutLAN(t *testing.T) {
+	certPEM, keyPEM := generateSelfSignedCert("")
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("X509KeyPair failed: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(tlsCert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate failed: %v", err)
+	}
+	// A wildcard or garbage LAN value must not end up as a bogus SAN.
+	for _, ip := range leaf.IPAddresses {
+		if ip.IsUnspecified() {
+			t.Errorf("certificate should not contain the unspecified address, got %v", ip)
+		}
+	}
+	if err := leaf.VerifyHostname("localhost"); err != nil {
+		t.Errorf("certificate should be valid for localhost: %v", err)
+	}
+}
+
+func TestHostForDisplay(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   string
+		want string
+	}{
+		{"loopback is left alone", "127.0.0.1", "127.0.0.1"},
+		{"wildcard has no dialable URL", "0.0.0.0", "127.0.0.1"},
+		{"wildcard v6 has no dialable URL", "::", "127.0.0.1"},
+		{"lan address is shown as-is", "192.168.1.20", "192.168.1.20"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hostForDisplay(net.ParseIP(tt.ip)); got != tt.want {
+				t.Errorf("hostForDisplay(%s) = %s, want %s", tt.ip, got, tt.want)
+			}
+		})
+	}
+	if got := hostForDisplay(nil); got != "127.0.0.1" {
+		t.Errorf("hostForDisplay(nil) = %s, want 127.0.0.1", got)
+	}
+}
+
+func TestLoopbackHost(t *testing.T) {
+	tests := []struct {
+		host string
+		want bool
+	}{
+		{"", true},
+		{"127.0.0.1", true},
+		{"localhost", true},
+		{"LOCALHOST", true},
+		{"127.0.0.1:8080", true},
+		{"0.0.0.0", true},
+		{"::1", true},
+		{"0.0.0.0:3000", true},
+		{"192.168.1.20", false},
+		{"10.0.0.5:8080", false},
+		{"example.com", false},
+	}
+	for _, tt := range tests {
+		if got := loopbackHost(tt.host); got != tt.want {
+			t.Errorf("loopbackHost(%q) = %v, want %v", tt.host, got, tt.want)
+		}
+	}
+}
+
+func TestQRFileName(t *testing.T) {
+	got := qrFileName("http://192.168.1.20:8080", 8080)
+	if got != "qrcode_192.168.1.20_8080.png" {
+		t.Errorf("unexpected filename: %s", got)
+	}
+	// Path separators and colons must not survive into the filename.
+	if got := qrFileName("http://[fe80::1]:8080", 8080); strings.ContainsAny(got, "/:\\") {
+		t.Errorf("filename %s contains unsafe characters", got)
+	}
+	if got := qrFileName("not a url", 1234); strings.ContainsAny(got, " /\\") {
+		t.Errorf("filename %s contains unsafe characters", got)
 	}
 }
 

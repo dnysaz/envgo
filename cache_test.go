@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDevServerAddrDefaults(t *testing.T) {
@@ -86,20 +88,64 @@ func TestDoCacheClearSuccess(t *testing.T) {
 	}
 }
 
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns what was
+// written. The read happens on its own goroutine: a pipe has a fixed kernel
+// buffer, so reading it only after fn returns deadlocks as soon as fn writes more
+// than that buffer holds. os.Stdout is restored even if fn panics.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
-	old := os.Stdout
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	old := os.Stdout
 	os.Stdout = w
-	fn()
-	_ = w.Close()
-	os.Stdout = old
-	b, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
+
+	done := make(chan string, 1)
+	go func() {
+		b, err := io.ReadAll(r)
+		if err != nil {
+			done <- ""
+			return
+		}
+		done <- string(b)
+	}()
+
+	func() {
+		defer func() {
+			os.Stdout = old
+			_ = w.Close()
+		}()
+		fn()
+	}()
+
+	out := <-done
+	_ = r.Close()
+	return out
+}
+
+// TestCaptureStdoutHandlesLargeOutput guards the deadlock above: the payload is
+// comfortably larger than a pipe buffer, which would hang if the reader were
+// started only after the writer finished.
+func TestCaptureStdoutHandlesLargeOutput(t *testing.T) {
+	const size = 512 * 1024
+	chunk := strings.Repeat("x", 4096)
+
+	done := make(chan string, 1)
+	go func() {
+		done <- captureStdout(t, func() {
+			for i := 0; i < size/len(chunk); i++ {
+				fmt.Fprint(os.Stdout, chunk)
+			}
+		})
+	}()
+
+	select {
+	case out := <-done:
+		if len(out) != size {
+			t.Fatalf("expected %d bytes, got %d", size, len(out))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("captureStdout deadlocked on output larger than the pipe buffer")
 	}
-	return string(b)
 }

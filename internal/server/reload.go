@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"envbridge/internal/hotreload"
+	"envgo/internal/hotreload"
 )
 
 // dev returns true when the server is running in development mode, where the

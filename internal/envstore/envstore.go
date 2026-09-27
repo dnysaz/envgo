@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"envbridge/internal/envconfig"
-	"envbridge/internal/logger"
+	"envgo/internal/envconfig"
+	"envgo/internal/logger"
 )
 
 // Store holds the parsed .env values behind an RWMutex so the proxy can read

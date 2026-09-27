@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"envbridge/internal/history"
-	"envbridge/internal/logger"
-	"envbridge/internal/proxy"
+	"envgo/internal/history"
+	"envgo/internal/logger"
+	"envgo/internal/proxy"
 )
 
 func newTestGateway(t *testing.T, cfg *Config, vars proxy.MapVars) (*Gateway, *httptest.Server) {
