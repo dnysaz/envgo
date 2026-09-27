@@ -79,11 +79,32 @@ func EncodeBinary(data []byte, ecl Ecc) (*Matrix, error) {
 	return buildMatrix(version, ecl, codewords), nil
 }
 
+// quietZone is the light margin, in modules, that the QR spec requires around
+// the symbol. Four is the spec minimum and what phone scanners expect; without
+// it the dark finder pattern touches the surrounding text and detection drops
+// sharply. One character cell is one module wide, but two matrix rows share one
+// output line, so the margin is 4 cells across and 2 lines down.
+const (
+	quietZoneCols = 4
+	quietZoneRows = 2
+)
+
 // String renders the QR code as a grid of Unicode half-blocks (two matrix
-// rows per output line, one character cell per module).
+// rows per output line, one character cell per module), surrounded by the
+// four-module quiet zone the spec requires.
+//
+// The half-blocks must be U+2580/U+2584, not the box-drawing U+2500/U+2502.
+// The latter are hairline strokes a camera cannot resolve, so the code is
+// technically correct but unscannable in practice.
 func (m *Matrix) String() string {
 	var b strings.Builder
+	blank := strings.Repeat(" ", m.Size+2*quietZoneCols)
+	for i := 0; i < quietZoneRows; i++ {
+		b.WriteString(blank)
+		b.WriteByte('\n')
+	}
 	for y := 0; y < m.Size; y += 2 {
+		b.WriteString(strings.Repeat(" ", quietZoneCols))
 		for x := 0; x < m.Size; x++ {
 			top := m.Dark[y][x]
 			bot := false
@@ -92,15 +113,20 @@ func (m *Matrix) String() string {
 			}
 			switch {
 			case top && bot:
-				b.WriteString("\xe2\x96\x88") // █
+				b.WriteString("\xe2\x96\x88") // █ full block
 			case top:
-				b.WriteString("\xe2\x94\x80") // ▀
+				b.WriteString("\xe2\x96\x80") // ▀ upper half block
 			case bot:
-				b.WriteString("\xe2\x94\x82") // ▄
+				b.WriteString("\xe2\x96\x84") // ▄ lower half block
 			default:
 				b.WriteByte(' ')
 			}
 		}
+		b.WriteString(strings.Repeat(" ", quietZoneCols))
+		b.WriteByte('\n')
+	}
+	for i := 0; i < quietZoneRows; i++ {
+		b.WriteString(blank)
 		b.WriteByte('\n')
 	}
 	return b.String()
