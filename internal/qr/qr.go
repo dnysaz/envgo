@@ -697,10 +697,6 @@ func formatWord(ecl Ecc, mask int) uint16 {
 	return uint16((d<<10 | rem) ^ 0x5412)
 }
 
-func bitOf(v uint16, i int) bool {
-	return v>>uint(14-i)&1 == 1
-}
-
 // writeFormatBits places the 15-bit format string in both copies. Layout
 // follows the standard "format information" module order.
 func writeFormatBits(dark, funcs [][]bool, ecl Ecc, mask, size int) {

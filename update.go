@@ -19,8 +19,12 @@ import (
 
 const (
 	githubRepo = "dnysaz/envgo"
-	githubAPI  = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
 )
+
+// githubAPI is a variable so tests can point it at a stub. githubMeta returning
+// nil is what sends doUpdate down the fallback path, so its failure modes are
+// worth covering directly.
+var githubAPI = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
 
 type ghRelease struct {
 	TagName string    `json:"tag_name"`

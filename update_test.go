@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPlatformAsset(t *testing.T) {
@@ -321,5 +324,189 @@ func TestVerifyDownloadAllowsVerified(t *testing.T) {
 
 	if err := verifyDownload(client, path, rel, "envgo-darwin-arm64", false); err != nil {
 		t.Fatalf("a verified download must pass, got %v", err)
+	}
+}
+
+// installBinary had no coverage at all, even though it is the actual swap that
+// replaces the running executable. These tests pin down that it really replaces
+// the file and preserves the executable bit.
+func TestInstallBinaryReplacesTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "envgo")
+	src := filepath.Join(dir, ".envgo.update.envgo")
+
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.WriteFile(src, []byte("new binary"), 0o755); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	if err := installBinary(src, target); err != nil {
+		t.Fatalf("installBinary: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if string(got) != "new binary" {
+		t.Fatalf("target = %q, want the new binary", got)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatal("the source file should be gone after the rename")
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("target is not executable: %v", info.Mode())
+	}
+}
+
+// A missing source must surface as an error rather than silently doing nothing.
+func TestInstallBinaryReportsMissingSource(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "envgo")
+	if err := os.WriteFile(target, []byte("keep me"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := installBinary(filepath.Join(dir, "does-not-exist"), target); err == nil {
+		t.Fatal("expected an error for a missing source")
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "keep me" {
+		t.Fatalf("a failed install must not clobber the target, got %q", got)
+	}
+}
+
+func TestDownloadToFile(t *testing.T) {
+	const payload = "hello envgo"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/missing" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, payload)
+	}))
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "dl")
+	if err := downloadToFile(srv.Client(), srv.URL+"/ok", out); err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != payload {
+		t.Fatalf("downloaded %q, want %q", got, payload)
+	}
+}
+
+func TestDownloadToFileRejectsHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "dl")
+	err := downloadToFile(srv.Client(), srv.URL+"/missing", out)
+	if err == nil {
+		t.Fatal("a 404 must be reported as an error")
+	}
+	if _, statErr := os.Stat(out); statErr == nil {
+		t.Fatal("no file should be left behind for a failed download")
+	}
+}
+
+func TestPct(t *testing.T) {
+	cases := []struct {
+		n, d int64
+		want float64
+	}{
+		{0, 100, 0},
+		{50, 100, 50},
+		{100, 100, 100},
+		{1, 3, 100.0 / 3},
+		{5, 0, 0}, // divide-by-zero must not panic
+	}
+	for _, c := range cases {
+		if got := pct(c.n, c.d); got != c.want {
+			t.Errorf("pct(%d,%d) = %v, want %v", c.n, c.d, got, c.want)
+		}
+	}
+}
+
+// githubMeta returning nil is the trigger for the fallback download path, so
+// every way it can fail is worth pinning down: each must return nil rather than
+// a half-parsed release that would send the updater down the wrong branch.
+func TestGithubMeta(t *testing.T) {
+	stub := func(t *testing.T, handler http.HandlerFunc) *http.Client {
+		t.Helper()
+		srv := httptest.NewServer(handler)
+		t.Cleanup(srv.Close)
+		orig := githubAPI
+		githubAPI = srv.URL
+		t.Cleanup(func() { githubAPI = orig })
+		return srv.Client()
+	}
+
+	t.Run("valid release", func(t *testing.T) {
+		client := stub(t, func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, `{"tag_name":"v9.9.9","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"}]}`)
+		})
+		rel := githubMeta(client)
+		if rel == nil {
+			t.Fatal("expected a release")
+		}
+		if rel.TagName != "v9.9.9" {
+			t.Fatalf("tag = %q, want v9.9.9", rel.TagName)
+		}
+		if got := findAssetURL(rel, "SHA256SUMS"); got != "https://example.test/SHA256SUMS" {
+			t.Fatalf("asset url = %q", got)
+		}
+	})
+
+	t.Run("server error", func(t *testing.T) {
+		client := stub(t, func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "rate limited", http.StatusForbidden)
+		})
+		if rel := githubMeta(client); rel != nil {
+			t.Fatalf("expected nil on HTTP 403, got %+v", rel)
+		}
+	})
+
+	t.Run("malformed json", func(t *testing.T) {
+		client := stub(t, func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, "not json at all")
+		})
+		if rel := githubMeta(client); rel != nil {
+			t.Fatalf("expected nil on malformed JSON, got %+v", rel)
+		}
+	})
+
+	t.Run("unreachable", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		url := srv.URL
+		srv.Close()
+		orig := githubAPI
+		githubAPI = url
+		defer func() { githubAPI = orig }()
+		if rel := githubMeta(&http.Client{Timeout: 2 * time.Second}); rel != nil {
+			t.Fatalf("expected nil on an unreachable API, got %+v", rel)
+		}
+	})
+}
+
+func TestAssetNameMatchesPlatform(t *testing.T) {
+	got := assetName()
+	want := platformAsset(runtime.GOOS, runtime.GOARCH)
+	if got != want {
+		t.Fatalf("assetName() = %q, want %q", got, want)
+	}
+	if runtime.GOOS == "windows" && !strings.HasSuffix(got, ".exe") {
+		t.Fatalf("windows asset %q should end in .exe", got)
 	}
 }
