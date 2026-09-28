@@ -247,8 +247,12 @@ func main() {
 		log.Error("cannot load %s: %v", envPathVal, err)
 		os.Exit(1)
 	}
-	if store.Len() > 0 {
-		log.Info("loaded %d variables from %s", store.Len(), envPathVal)
+	if n := store.Len(); n > 0 {
+		word := "variables"
+		if n == 1 {
+			word = "variable"
+		}
+		log.Info("loaded %d %s from %s", n, word, envPathVal)
 	} else {
 		log.Warn("%s has no variables (or does not exist yet)", envPathVal)
 		log.Warn("hint: create .env or run with -e /path/to/.env  |  example: envgo -e /path/to/.env -a httpbin.org -b")
@@ -383,7 +387,11 @@ func main() {
 			os.Exit(1)
 		}
 		gw = gateway.New(cfg, store, log, hist)
-		log.Info("PUBLIC MODE: %d route(s) from %s (/proxy and token endpoints disabled)", len(cfg.Routes), configPathVal)
+		word := "routes"
+		if len(cfg.Routes) == 1 {
+			word = "route"
+		}
+		log.Info("PUBLIC MODE: %d %s from %s (/proxy and token endpoints disabled)", len(cfg.Routes), word, configPathVal)
 		for _, r := range cfg.Routes {
 			for _, v := range r.Vars {
 				if _, ok := store.Get(v); !ok {

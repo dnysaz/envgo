@@ -143,7 +143,11 @@ func (s *Store) Watch(ctx context.Context, interval time.Duration) {
 				continue
 			}
 			if changed {
-				s.log.Info("hot-reloaded %d variables from %s", s.Len(), s.path)
+				word := "variables"
+				if s.Len() == 1 {
+					word = "variable"
+				}
+				s.log.Info("hot-reloaded %d %s from %s", s.Len(), word, s.path)
 			}
 		}
 	}
