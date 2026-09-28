@@ -125,6 +125,7 @@ func main() {
 		deployOutputVal string
 		qrVal           bool
 		qrFormatVal     string
+		skipChecksumVal bool
 	)
 
 	flag.IntVar(&portVal, "port", 8080, "port to listen on")
@@ -152,13 +153,15 @@ func main() {
 	flag.StringVar(&deployOutputVal, "o", "", "output directory for deploy configs (default: ./deploy)")
 	flag.BoolVar(&qrVal, "qr", false, "share on the local network: bind all interfaces and print a scannable QR code of the LAN URL")
 	flag.StringVar(&qrFormatVal, "qr-format", "ansi", "QR output format: ansi (terminal) or png (file)")
-
+	flag.BoolVar(&skipChecksumVal, "skip-checksum", false, "envgo run update: install even when the release manifest cannot be fetched (a digest mismatch is never skipped)")
+	flag.BoolVar(&skipChecksumVal, "k", false, "envgo run update: skip checksum (shorthand)")
 	flag.Usage = func() {
 		printBanner()
 		fmt.Println("Usage:")
 		fmt.Println("  envgo -e .env [options]                      — start server")
 		fmt.Println("  envgo run [dev] [options]                    — start dev server")
 		fmt.Println("  envgo run update                             — update envgo to latest release")
+		fmt.Println("  envgo run update --skip-checksum             — update when the release manifest is unreachable")
 		fmt.Println("  envgo init [options]                         — create new project template")
 		fmt.Println("  envgo deploy [options]                       — generate Caddyfile/nginx config")
 		fmt.Println()
@@ -229,7 +232,7 @@ func main() {
 		return
 	}
 	if updateMode {
-		doUpdate()
+		doUpdate(skipChecksumVal)
 		return
 	}
 	if cacheMode {
@@ -597,7 +600,7 @@ PORT=8080
 		"## Commands\n" +
 		"```bash\n" +
 		"envgo run dev                    # start dev server (reads HOST/PORT from .env)\n" +
-		"envgo run update                 # update envgo to latest release (cross-platform)\n" +
+		"envgo run update                 # update envgo to latest release (checksum-verified)\n" +
 		"envgo -h                         # show help\n" +
 		"envgo -v                         # print version\n" +
 		"envgo --tls                      # start with HTTPS (auto-generated cert)\n" +

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,7 +50,7 @@ func assetName() string {
 	return platformAsset(runtime.GOOS, runtime.GOARCH)
 }
 
-func doUpdate() {
+func doUpdate(skip bool) {
 	fmt.Print("Update envgo to latest version? Y/n ")
 	ask := bufio.NewReader(os.Stdin)
 	line, err := ask.ReadString('\n')
@@ -72,7 +73,7 @@ func doUpdate() {
 	meta := githubMeta(client)
 	if meta == nil {
 		// githubMeta printed an error; fall back to a direct download.
-		fallbackDownload(client)
+		fallbackDownload(client, skip)
 		return
 	}
 	if meta.TagName == "" {
@@ -117,9 +118,11 @@ func doUpdate() {
 		}
 	}
 
-	// Best-effort checksum verification against the release SHA256SUMS asset.
-	if !verifyChecksum(tmp, meta, asset) {
-		fmt.Println("  (checksum not verified: no SHA256SUMS asset found — relying on startup check)")
+	// Integrity gate: refuse to install anything we cannot prove is the
+	// released binary. --skip-checksum is the only way past an unverifiable
+	// manifest, and it never covers an actual digest mismatch.
+	if err := verifyDownload(client, tmp, meta, asset, skip); err != nil {
+		return
 	}
 
 	// Startup self-check: ensure the downloaded binary is valid.
@@ -177,42 +180,106 @@ func findAssetURL(rel *ghRelease, want string) string {
 	return ""
 }
 
-// verifyChecksum checks the downloaded file against the SHA256SUMS asset in the
-// release when present. It returns false (and skips) when no such asset exists.
-func verifyChecksum(path string, rel *ghRelease, asset string) bool {
+// latestManifestURL returns the fallback manifest location, used when the
+// release metadata carries no SHA256SUMS asset. It is a function value rather
+// than an inline format so tests can point it at a stub instead of reaching
+// out to GitHub.
+var latestManifestURL = func() string {
+	return fmt.Sprintf("https://github.com/%s/releases/latest/download/SHA256SUMS", githubRepo)
+}
+
+// verifyChecksum checks the downloaded file against the SHA256SUMS manifest for
+// the release. It returns nil only when the digest was proven to match.
+//
+// Every other outcome is an error, including the ones that are merely
+// unverifiable: an unreachable manifest, an unreadable manifest, or a manifest
+// that does not list this asset all mean "we cannot prove these are our
+// bytes". Callers must treat any error as a hard failure unless the user
+// explicitly opted out via --skip-checksum.
+func verifyChecksum(client *http.Client, path string, rel *ghRelease, asset string) error {
 	sumURL := findAssetURL(rel, "SHA256SUMS")
 	if sumURL == "" {
-		sumURL = fmt.Sprintf("https://github.com/%s/releases/latest/download/SHA256SUMS", githubRepo)
+		sumURL = latestManifestURL()
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, _ := http.NewRequest(http.MethodGet, sumURL, nil)
+	req, err := http.NewRequest(http.MethodGet, sumURL, nil)
+	if err != nil {
+		return fmt.Errorf("%w: cannot build manifest request: %v", errChecksumUnverified, err)
+	}
 	req.Header.Set("User-Agent", "envgo/"+version)
 	res, err := client.Do(req)
 	if err != nil {
-		return false
+		return fmt.Errorf("%w: cannot fetch SHA256SUMS: %v", errChecksumUnverified, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return false
-	}
-	got, err := sha256File(path)
-	if err != nil {
-		return false
+		return fmt.Errorf("%w: SHA256SUMS returned HTTP %s", errChecksumUnverified, res.Status)
 	}
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return false
+		return fmt.Errorf("%w: cannot read SHA256SUMS: %v", errChecksumUnverified, err)
 	}
 	want := matchChecksum(string(body), asset)
 	if want == "" {
-		return false
+		return fmt.Errorf("%w: SHA256SUMS does not list %s", errChecksumUnverified, asset)
+	}
+	got, err := sha256File(path)
+	if err != nil {
+		return fmt.Errorf("%w: cannot hash the download: %v", errChecksumUnverified, err)
 	}
 	if got != want {
-		fmt.Fprintf(os.Stderr, "envgo: checksum mismatch for %s (got %s, want %s)\n", asset, got, want)
-		os.Exit(1)
+		return fmt.Errorf("%w for %s (got %s, want %s)", errChecksumMismatch, asset, got, want)
 	}
-	fmt.Printf("  checksum OK (%s)\n", asset)
-	return true
+	return nil
+}
+
+// errChecksumMismatch marks a digest that disagrees with the published
+// manifest. It is never bypassable by --skip-checksum: the downloaded bytes
+// are not the bytes we published, and only the release author can explain why.
+var errChecksumMismatch = errors.New("checksum mismatch")
+
+// errChecksumUnverified marks a download we could not prove either way, because
+// the manifest was unreachable, unreadable, or did not list the asset.
+var errChecksumUnverified = errors.New("checksum could not be verified")
+
+// enforceChecksum decides whether an update may continue after a verification
+// attempt. It returns nil when installing is safe, or an error explaining why
+// the update must be aborted.
+//
+// A mismatch always aborts. Unverifiability aborts too, unless the user passed
+// --skip-checksum, which exists as the escape hatch for corporate proxies and
+// air-gapped mirrors that cannot reach the release manifest.
+func enforceChecksum(err error, skip bool) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errChecksumMismatch) {
+		return err
+	}
+	if !skip {
+		return err
+	}
+	fmt.Fprintln(os.Stderr, "  WARNING: --skip-checksum was set, so this download is UNVERIFIED.")
+	fmt.Fprintln(os.Stderr, "  A proxy or mirror may have altered it. Only proceed if you trust your network.")
+	return nil
+}
+
+// verifyDownload is the single gate both the normal and the API-fallback update
+// paths go through, so neither can install an unverified binary by accident.
+func verifyDownload(client *http.Client, path string, rel *ghRelease, asset string, skip bool) error {
+	if err := enforceChecksum(verifyChecksum(client, path, rel, asset), skip); err != nil {
+		if errors.Is(err, errChecksumMismatch) {
+			fmt.Fprintf(os.Stderr, "envgo: %v\n", err)
+			fmt.Fprintln(os.Stderr, "envgo: refusing to install. Re-run with a clean network, or download and verify manually from the release page.")
+		} else {
+			fmt.Fprintf(os.Stderr, "envgo: %v\n", err)
+			fmt.Fprintln(os.Stderr, "envgo: refusing to install an unverified binary. If your network cannot reach the release manifest, re-run with --skip-checksum.")
+		}
+		return err
+	}
+	if !skip {
+		fmt.Printf("  checksum OK (%s)\n", asset)
+	}
+	return nil
 }
 
 // matchChecksum finds the sha256 hex whose recorded path ends with `asset`.
@@ -234,7 +301,7 @@ func matchChecksum(sums, asset string) string {
 
 // fallbackDownload downloads the platform asset straight from GitHub's
 // /releases/latest/download redirect when the API is unavailable.
-func fallbackDownload(client *http.Client) {
+func fallbackDownload(client *http.Client, skip bool) {
 	asset := assetName()
 	url := fmt.Sprintf("https://github.com/%s/releases/latest/download/%s", githubRepo, asset)
 	fmt.Printf("GitHub API unreachable; trying direct download of %s\n", asset)
@@ -256,6 +323,12 @@ func fallbackDownload(client *http.Client) {
 	defer os.Remove(tmp)
 	if runtime.GOOS != "windows" {
 		_ = os.Chmod(tmp, 0o755)
+	}
+	// The fallback path used to skip verification entirely. It now goes through
+	// the same gate; rel is nil, so verifyChecksum resolves the manifest from
+	// the /releases/latest/download redirect.
+	if err := verifyDownload(client, tmp, nil, asset, skip); err != nil {
+		return
 	}
 	if err := exec.Command(tmp, "-h").Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "envgo: downloaded binary failed its startup check (-h): %v\n", err)
