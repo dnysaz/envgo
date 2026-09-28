@@ -170,8 +170,12 @@ func githubMeta(client *http.Client) *ghRelease {
 }
 
 // findAssetURL returns the browser_download_url for the platform asset, or ""
-// if the release has no matching asset.
+// if the release has no matching asset. A nil rel is treated as "no metadata",
+// which is the case on the API-fallback download path.
 func findAssetURL(rel *ghRelease, want string) string {
+	if rel == nil {
+		return ""
+	}
 	for _, a := range rel.Assets {
 		if a.Name == want {
 			return a.BrowserDownloadURL

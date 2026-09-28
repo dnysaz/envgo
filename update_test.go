@@ -273,6 +273,42 @@ func TestVerifyDownloadAllowsSkipForUnverified(t *testing.T) {
 	}
 }
 
+// The API-fallback download path calls verifyChecksum with a nil release
+// because it never saw the GitHub API response. findAssetURL must tolerate
+// that: a missing nil check here made `envgo run update` panic with a nil
+// pointer dereference precisely when the API was unreachable, which is the
+// only situation the fallback exists to handle.
+func TestFindAssetURLToleratesNilRelease(t *testing.T) {
+	if got := findAssetURL(nil, "SHA256SUMS"); got != "" {
+		t.Fatalf("findAssetURL(nil) = %q, want empty", got)
+	}
+}
+
+// End-to-end shape of the fallback gate: with nil metadata, the manifest URL
+// falls back to latestManifestURL, and a bad digest blocks the install on that
+// path exactly as it does on the main one.
+func TestVerifyDownloadFallbackPathBlocksMismatch(t *testing.T) {
+	path := writeAsset(t, "tampered binary")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "0000000000000000000000000000000000000000000000000000000000000000  dist/envgo-darwin-arm64\n")
+	}))
+	defer srv.Close()
+
+	orig := latestManifestURL
+	latestManifestURL = func() string { return srv.URL + "/SHA256SUMS" }
+	defer func() { latestManifestURL = orig }()
+
+	// rel is nil, matching fallbackDownload.
+	err := verifyDownload(srv.Client(), path, nil, "envgo-darwin-arm64", false)
+	if !errors.Is(err, errChecksumMismatch) {
+		t.Fatalf("fallback path: want errChecksumMismatch, got %v", err)
+	}
+	// And the escape hatch must not cover a real mismatch here either.
+	if err := verifyDownload(srv.Client(), path, nil, "envgo-darwin-arm64", true); err == nil {
+		t.Fatal("--skip-checksum must not wave through a mismatch on the fallback path")
+	}
+}
+
 // A verified download passes the gate.
 func TestVerifyDownloadAllowsVerified(t *testing.T) {
 	const body = "the real binary"
